@@ -1,0 +1,1329 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kavram Hazinesi</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Pirata+One&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;0,800;1,500&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<style>
+/* Layout: gece deniz haritası. Telefonda tek sütun; genişte harita solda, panel sağda. Oyun sırasında üstte durum çubuğu. */
+:root {
+  --sea: #0A1D26;
+  --sea-2: #11303C;
+  --bone: #EDE5D0;
+  --muted: #9DB2B3;
+  --brass: #E3B65B;
+  --parch: #F0E3C3;
+  --parch-ink: #2B1F11;
+  --wood: #7B4F2B;
+  --wood-2: #5A381C;
+  --dead: #E07A5F;
+  --line: rgba(157, 178, 179, .22);
+  --display: "Pirata One", "Georgia", serif;
+  --body: "Alegreya Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  background: var(--sea);
+  background-image: radial-gradient(1200px 700px at 50% -10%, var(--sea-2), transparent 70%);
+  color: var(--bone);
+  font-family: var(--body);
+  font-size: 17px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--brass); outline-offset: 3px; border-radius: 6px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+
+.app { max-width: 1120px; margin: 0 auto; padding: 16px 16px 48px; }
+
+/* ---------- Durum çubuğu ---------- */
+.hud {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 10px 16px; margin: -16px -16px 16px;
+  background: rgba(8, 24, 31, .92); backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--line);
+}
+.hud .cap { font-family: var(--display); font-size: 22px; line-height: 1; color: var(--brass); margin-right: auto; }
+.hud .stat { font-family: var(--mono); font-size: 14px; color: var(--muted); display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.hud .stat b { color: var(--bone); font-weight: 600; }
+.hud svg { width: 18px; height: 18px; }
+.pouch { display: flex; gap: 4px; }
+.pouch span {
+  width: 22px; height: 26px; border-radius: 4px; display: grid; place-items: center;
+  font-family: var(--mono); font-weight: 600; font-size: 13px;
+  border: 1px dashed rgba(227, 182, 91, .4); color: transparent;
+}
+.pouch span.got { border: 1px solid var(--brass); background: rgba(227, 182, 91, .16); color: var(--brass); }
+
+/* ---------- Harita ---------- */
+.stage { display: grid; gap: 20px; align-items: start; }
+@media (min-width: 880px) { .stage { grid-template-columns: minmax(0, 1fr) 400px; gap: 28px; } }
+.chart { position: relative; width: 100%; aspect-ratio: 1 / 1; border-radius: 14px; overflow: hidden;
+  border: 1px solid var(--line); box-shadow: 0 30px 60px -30px rgba(0,0,0,.6); }
+.chart canvas, .chart svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.node circle.disc { fill: #0C232C; stroke: rgba(237,229,208,.45); stroke-width: 3; }
+.node text { font-family: var(--mono); font-weight: 600; font-size: 30px; fill: rgba(237,229,208,.6); text-anchor: middle; dominant-baseline: central; }
+.node.done circle.disc { fill: var(--brass); stroke: #FFF1CF; }
+.node.done text { fill: #2B1F11; }
+.node.next circle.disc { stroke: var(--brass); stroke-width: 4; fill: #12323E; }
+.node.next text { fill: var(--bone); }
+.pulse { fill: none; stroke: var(--brass); stroke-width: 3; opacity: .0; transform-box: fill-box; transform-origin: center; animation: pulse 1.8s ease-out infinite; }
+@keyframes pulse { 0% { opacity: .8; transform: scale(1); } 100% { opacity: 0; transform: scale(1.9); } }
+.maplabel { font-family: var(--body); font-weight: 800; font-size: 38px; fill: var(--bone); paint-order: stroke; stroke: #0A1D26; stroke-width: 10px; stroke-linejoin: round; }
+.maplabel.small { font-size: 28px; font-weight: 700; fill: var(--muted); }
+
+/* ---------- Paneller ---------- */
+.panel { display: grid; gap: 16px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.title { font-family: var(--display); font-weight: 400; font-size: clamp(52px, 11vw, 84px); line-height: .92; color: var(--brass); letter-spacing: .01em; }
+.h2 { font-family: var(--display); font-weight: 400; font-size: 40px; line-height: 1; color: var(--brass); }
+.lead { font-size: 18px; color: var(--bone); max-width: 60ch; margin: 0; }
+.muted { color: var(--muted); }
+.card { background: rgba(17, 48, 60, .55); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+
+.field { display: grid; gap: 6px; }
+.field label { font-weight: 700; font-size: 15px; }
+.field input {
+  font: inherit; font-size: 18px; color: var(--bone); background: #0C232C;
+  border: 1px solid rgba(157,178,179,.4); border-radius: 10px; padding: 12px 14px;
+}
+.field input::placeholder { color: rgba(157,178,179,.7); }
+.err { color: var(--dead); font-size: 15px; min-height: 1.2em; margin: 0; }
+
+.modes { display: grid; gap: 10px; border: 0; margin: 0; padding: 0; }
+.modes legend { font-weight: 700; font-size: 15px; margin-bottom: 6px; padding: 0; }
+.mode { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(157,178,179,.35); cursor: pointer; background: #0C232C; }
+.mode input { margin-top: 5px; accent-color: var(--brass); }
+.mode b { display: block; }
+.mode span { color: var(--muted); font-size: 15px; }
+.mode:has(input:checked) { border-color: var(--brass); background: rgba(227,182,91,.08); }
+
+.rules { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; counter-reset: r; }
+.rules li { display: grid; grid-template-columns: 28px 1fr; gap: 8px; font-size: 16px; }
+.rules li::before { counter-increment: r; content: counter(r); font-family: var(--mono); font-weight: 600; font-size: 13px; color: var(--sea); background: var(--brass); width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; margin-top: 2px; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  font-weight: 800; font-size: 18px; padding: 13px 22px; border-radius: 12px; cursor: pointer;
+  background: var(--brass); color: #22180B; border: 0; box-shadow: 0 3px 0 #9C7631;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.btn:hover { transform: translateY(-1px); }
+.btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #9C7631; }
+.btn.ghost { background: transparent; color: var(--bone); border: 1px solid rgba(237,229,208,.4); box-shadow: none; }
+.btn[disabled] { opacity: .45; cursor: not-allowed; transform: none; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+.regions { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.regions li { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; align-items: center; font-size: 15px; padding: 6px 8px; border-radius: 8px; }
+.regions li .num { font-family: var(--mono); font-size: 13px; font-weight: 600; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; border: 1px solid rgba(237,229,208,.35); color: var(--muted); }
+.regions li.done .num { background: var(--brass); border-color: var(--brass); color: #22180B; }
+.regions li.next { background: rgba(227,182,91,.1); }
+.regions li.next .num { border-color: var(--brass); color: var(--brass); }
+.regions li .cat { color: var(--muted); font-size: 13px; display: block; line-height: 1.2; }
+.chip { font-family: var(--mono); font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(157,178,179,.35); color: var(--muted); white-space: nowrap; }
+.chip.gold { border-color: var(--brass); color: var(--brass); }
+
+/* ---------- Yol ayrımı ---------- */
+.cross { max-width: 680px; margin: 0 auto; display: grid; gap: 18px; }
+.crosshead { display: flex; justify-content: space-between; align-items: end; gap: 12px; flex-wrap: wrap; }
+.steps { display: flex; gap: 5px; }
+.steps i { width: 26px; height: 6px; border-radius: 3px; background: rgba(237,229,208,.18); }
+.steps i.on { background: var(--brass); }
+
+.scroll {
+  position: relative; color: var(--parch-ink); background: var(--parch);
+  background-image: radial-gradient(circle at 15% 20%, rgba(160,120,60,.16), transparent 40%), radial-gradient(circle at 85% 90%, rgba(160,120,60,.18), transparent 45%);
+  border-radius: 6px; padding: 22px 22px 20px; transform: rotate(-.6deg);
+  box-shadow: 0 18px 40px -18px rgba(0,0,0,.8), inset 0 0 0 1px rgba(43,31,17,.15);
+}
+.scroll::before { content: ""; position: absolute; inset: 7px; border: 1.5px dashed rgba(43,31,17,.28); border-radius: 4px; pointer-events: none; }
+.scroll .eyebrow { color: #7A5A2E; }
+.scroll p { margin: 6px 0 0; font-size: 21px; line-height: 1.45; font-weight: 500; font-style: italic; }
+
+.ask { font-weight: 700; font-size: 16px; margin: 0; text-align: center; color: var(--muted); }
+.post { position: relative; display: grid; gap: 14px; padding: 6px 0 40px; }
+.post::before { content: ""; position: absolute; left: 50%; top: -10px; bottom: 0; width: 14px; transform: translateX(-50%); border-radius: 4px;
+  background: linear-gradient(90deg, #4A2E16, #6E4524 45%, #4A2E16); }
+.post::after { content: ""; position: absolute; left: 50%; bottom: 0; width: 120px; height: 14px; transform: translateX(-50%); border-radius: 50%; background: radial-gradient(closest-side, rgba(0,0,0,.45), transparent); }
+.sign {
+  position: relative; z-index: 1; width: min(92%, 520px); min-height: 64px; cursor: pointer; border: 0;
+  padding: 12px 46px 12px 22px; text-align: left;
+  font-family: var(--mono); font-weight: 600; font-size: 16px; line-height: 1.3; color: #FFF4DC;
+  background: repeating-linear-gradient(178deg, var(--wood) 0 7px, #84552F 7px 9px, var(--wood) 9px 16px);
+  clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 50%, calc(100% - 30px) 100%, 0 100%);
+  filter: drop-shadow(0 6px 0 var(--wood-2));
+  transition: transform .15s ease, background .2s ease, opacity .2s ease;
+  justify-self: start; margin-left: 4%;
+}
+.sign.left { justify-self: end; margin-left: 0; margin-right: 4%; padding: 12px 22px 12px 46px; text-align: right;
+  clip-path: polygon(30px 0, 100% 0, 100% 100%, 30px 100%, 0 50%); }
+.sign:hover:not([disabled]) { transform: translateX(6px); }
+.sign.left:hover:not([disabled]) { transform: translateX(-6px); }
+.sign small { display: block; font-family: var(--body); font-weight: 700; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: rgba(255,244,220,.7); }
+.sign.dead { background: repeating-linear-gradient(178deg, #4C3B2E 0 7px, #54412F 7px 9px, #4C3B2E 9px 16px); color: rgba(255,244,220,.55); cursor: default; }
+.sign.dead .nm { text-decoration: line-through; text-decoration-color: var(--dead); text-decoration-thickness: 2px; }
+.sign.dead small { color: var(--dead); }
+.sign.closed { opacity: .35; cursor: default; }
+.sign.right { background: linear-gradient(180deg, #F2CD78, var(--brass)); color: #22180B; filter: drop-shadow(0 6px 0 #9C7631); }
+.sign.right small { color: #5A4214; }
+
+.tools { display: flex; justify-content: center; }
+.compass-btn { display: inline-flex; gap: 10px; align-items: center; background: transparent; border: 1px solid rgba(227,182,91,.55); color: var(--brass); padding: 10px 16px; border-radius: 999px; cursor: pointer; font-weight: 700; font-size: 15px; }
+.compass-btn svg { width: 22px; height: 22px; }
+.compass-btn[disabled] { opacity: .4; cursor: not-allowed; }
+
+.note { border-radius: 12px; padding: 14px 16px; border: 1px solid var(--line); background: rgba(17,48,60,.6); border-left: 5px solid var(--muted); display: grid; gap: 4px; }
+.note.bad { border-left-color: var(--dead); }
+.note.good { border-left-color: var(--brass); }
+.note h3 { font-size: 18px; font-weight: 800; }
+.note.bad h3 { color: var(--dead); }
+.note.good h3 { color: var(--brass); }
+.note p { margin: 0; }
+.note .term { font-family: var(--mono); font-weight: 600; font-size: 15px; }
+
+/* ---------- Harf, sandık ---------- */
+.center { max-width: 620px; margin: 0 auto; text-align: center; display: grid; gap: 16px; justify-items: center; }
+.bigtile { width: 120px; height: 140px; border-radius: 14px; display: grid; place-items: center; font-family: var(--display); font-size: 92px; line-height: 1; color: #22180B;
+  background: linear-gradient(180deg, #F6D88F, var(--brass)); box-shadow: 0 8px 0 #9C7631, 0 30px 50px -20px rgba(227,182,91,.6);
+  animation: flip .8s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes flip { from { transform: perspective(600px) rotateY(180deg) scale(.6); opacity: 0; } to { transform: none; opacity: 1; } }
+
+.chest { width: min(300px, 80%); height: auto; overflow: visible; }
+.chest .lid { transform-box: view-box; transform-origin: 40px 92px; transition: transform 1s cubic-bezier(.3,1.4,.4,1); }
+.chest.open .lid { transform: rotate(-38deg); }
+.chest .glow { opacity: 0; transition: opacity .8s .3s; }
+.chest.open .glow { opacity: 1; }
+.chest .coin { opacity: 0; }
+.chest.open .coin { animation: coin 1.4s .4s ease-out both; }
+.chest.open .coin:nth-of-type(2) { animation-delay: .55s; }
+.chest.open .coin:nth-of-type(3) { animation-delay: .7s; }
+.chest.open .coin:nth-of-type(4) { animation-delay: .85s; }
+@keyframes coin { 0% { opacity: 0; transform: translateY(20px); } 30% { opacity: 1; } 100% { opacity: 0; transform: translateY(-70px); } }
+
+.slots, .tiles { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.slots span { width: 44px; height: 54px; border-radius: 8px; border: 2px dashed rgba(227,182,91,.5); display: grid; place-items: center; font-family: var(--mono); font-weight: 600; font-size: 24px; color: var(--brass); }
+.slots span.f { border-style: solid; background: rgba(227,182,91,.12); }
+.slots.shake { animation: shake .45s; }
+@keyframes shake { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
+.tiles button { width: 48px; height: 56px; border-radius: 8px; border: 0; cursor: pointer; font-family: var(--mono); font-weight: 600; font-size: 24px; color: #22180B; background: linear-gradient(180deg, #F6D88F, var(--brass)); box-shadow: 0 4px 0 #9C7631; }
+.tiles button[disabled] { opacity: .2; cursor: default; box-shadow: none; }
+
+/* ---------- Sonuç ---------- */
+.result { max-width: 760px; margin: 0 auto; display: grid; gap: 18px; }
+.ticket { border-radius: 16px; padding: 22px; background: linear-gradient(160deg, #143845, #0C232C 60%); border: 1px solid rgba(227,182,91,.45); display: grid; gap: 14px; position: relative; overflow: hidden; }
+.ticket::after { content: "X"; position: absolute; right: -10px; top: -40px; font-family: var(--display); font-size: 220px; color: rgba(227,182,91,.07); line-height: 1; }
+.rank { font-family: var(--display); font-size: 46px; line-height: 1; color: var(--brass); }
+.stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+@media (min-width: 560px) { .stats { grid-template-columns: repeat(4, 1fr); } }
+.stats div { background: rgba(10,29,38,.6); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.stats b { display: block; font-family: var(--mono); font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stats span { font-size: 13px; color: var(--muted); }
+details.log { border: 1px solid var(--line); border-radius: 10px; background: rgba(17,48,60,.4); }
+details.log summary { cursor: pointer; padding: 12px 14px; font-weight: 800; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+details.log summary .chip { flex: none; line-height: 1.4; }
+details.log ul { list-style: none; margin: 0; padding: 0 14px 12px; display: grid; gap: 10px; }
+details.log li { display: grid; gap: 2px; }
+details.log .term { font-family: var(--mono); font-weight: 600; font-size: 15px; }
+details.log .ok { color: var(--brass); }
+details.log .miss { color: var(--dead); }
+textarea.copy { width: 100%; min-height: 90px; font-family: var(--mono); font-size: 13px; background: #0C232C; color: var(--bone); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+
+.fade { animation: fade .35s ease both; }
+@keyframes fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+}
+/* ---------- v2: zamanlayıcı, efektler, animasyonlar ---------- */
+#fx { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 60; }
+.timer { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; }
+.timer .lbl { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.timer .sec { font-family: var(--mono); font-weight: 600; font-size: 18px; min-width: 2.2ch; text-align: right; font-variant-numeric: tabular-nums; }
+.fuse { position: relative; height: 10px; border-radius: 5px; background: rgba(237,229,208,.12); }
+.fuse i { position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--k, 1) * 100%); border-radius: 5px; background: linear-gradient(90deg, #9C7631, var(--brass)); }
+.fuse i::after { content: ""; position: absolute; right: -7px; top: 50%; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%;
+  background: radial-gradient(circle, #FFF6D8 0 30%, #FFB347 45%, rgba(255,120,40,0) 70%); animation: spark .18s steps(2) infinite; }
+@keyframes spark { 50% { transform: scale(1.5) rotate(40deg); } }
+.timer.low .fuse i { background: linear-gradient(90deg, #8C3B2A, var(--dead)); }
+.timer.low .sec { color: var(--dead); animation: beat .5s ease-in-out infinite; }
+@keyframes beat { 50% { transform: scale(1.25); } }
+.timer.off .fuse i::after { display: none; }
+.float { position: fixed; z-index: 61; pointer-events: none; font-family: var(--display); font-size: 40px; line-height: 1; color: var(--brass);
+  text-shadow: 0 2px 0 #3A230F, 0 0 18px rgba(227,182,91,.6); transform: translate(-50%, -50%); animation: floatUp 1.2s ease-out forwards; white-space: nowrap; }
+.float.bad { color: var(--dead); text-shadow: 0 2px 0 #3A1510; }
+.float.streak { font-size: 34px; color: #FFD27A; }
+@keyframes floatUp { 0% { opacity: 0; transform: translate(-50%, -20%) scale(.6); } 15% { opacity: 1; transform: translate(-50%, -60%) scale(1.15); } 100% { opacity: 0; transform: translate(-50%, -190%) scale(1); } }
+.quake { animation: quake .45s; }
+@keyframes quake { 15% { transform: translate(-7px, 2px) rotate(-.4deg); } 30% { transform: translate(7px, -2px) rotate(.4deg); } 45% { transform: translate(-5px, 1px); } 60% { transform: translate(5px, -1px); } 80% { transform: translate(-2px, 0); } }
+.cross.enter .scroll { animation: unroll .7s cubic-bezier(.3,.9,.3,1) both; }
+@keyframes unroll { from { clip-path: inset(0 48% 0 48% round 6px); opacity: .3; } to { clip-path: inset(0 0 0 0 round 6px); opacity: 1; } }
+.cross.enter .sign { animation: swing .6s cubic-bezier(.2,1.4,.4,1) both; animation-delay: calc(var(--i) * 120ms + 350ms); transform-origin: 50% 0; }
+@keyframes swing { from { opacity: 0; transform: translateY(-40px) rotate(-8deg); } 60% { opacity: 1; } to { opacity: 1; transform: none; } }
+.cross.enter .post::before { animation: grow .5s ease-out both; transform-origin: top; }
+@keyframes grow { from { transform: translateX(-50%) scaleY(0); } to { transform: translateX(-50%) scaleY(1); } }
+.sign.hit { animation: hit .5s; }
+@keyframes hit { 20% { transform: translateX(-12px) rotate(-2deg); } 40% { transform: translateX(10px) rotate(2deg); } 60% { transform: translateX(-6px) rotate(-1deg); } 80% { transform: translateX(3px); } }
+.sign.right.win { animation: win .9s cubic-bezier(.2,1.5,.4,1); }
+@keyframes win { 0% { transform: scale(.94); } 40% { transform: scale(1.07); } 100% { transform: none; } }
+.sign.right { filter: drop-shadow(0 6px 0 #9C7631) drop-shadow(0 0 18px rgba(227,182,91,.55)); }
+.hud .streak { font-family: var(--mono); font-weight: 600; font-size: 13px; padding: 3px 9px; border-radius: 999px; color: #22180B; background: linear-gradient(90deg, #FFB347, var(--brass)); animation: beat 1s ease-in-out infinite; }
+.title { animation: rise .9s cubic-bezier(.2,.9,.3,1) both; }
+@keyframes rise { from { opacity: 0; transform: translateY(18px) scale(.97); letter-spacing: .08em; } to { opacity: 1; transform: none; } }
+#ship .bob { animation: bob 2.6s ease-in-out infinite; }
+@keyframes bob { 0%, 100% { transform: translateY(0) rotate(-4deg); } 50% { transform: translateY(-7px) rotate(4deg); } }
+.waves path { fill: none; stroke: rgba(160,215,220,.35); stroke-width: 3; stroke-linecap: round; animation: drift 5s ease-in-out infinite alternate; }
+.waves path:nth-child(2n) { animation-duration: 6.5s; animation-delay: -2s; }
+.waves path:nth-child(3n) { animation-duration: 4.2s; animation-delay: -1s; }
+@keyframes drift { from { transform: translateX(-14px); opacity: .25; } to { transform: translateX(14px); opacity: .8; } }
+.node.next .disc { animation: glowN 1.6s ease-in-out infinite; }
+@keyframes glowN { 50% { stroke-width: 7; } }
+.chest:not(.open) .lid { animation: rattle 2.4s ease-in-out infinite; }
+@keyframes rattle { 0%, 82%, 100% { transform: none; } 86% { transform: rotate(-3deg); } 90% { transform: rotate(2deg); } 94% { transform: rotate(-1.5deg); } }
+.tiles button { transition: transform .15s; }
+.tiles button:not([disabled]):hover { transform: translateY(-4px) rotate(-3deg); }
+.slots span.f { animation: pop .3s cubic-bezier(.2,1.6,.4,1); }
+@keyframes pop { from { transform: scale(.4); } to { transform: none; } }
+.ticket { animation: rise .8s .2s both; }
+/* ---------- v3: karakter, rozet, panel ---------- */
+.avatar { display: block; width: 100%; height: auto; }
+.hud .face { width: 34px; height: 34px; border-radius: 50%; overflow: hidden; background: #12323E; border: 2px solid var(--brass); flex: none; }
+.hud .face .avatar { width: 46px; margin: -2px 0 0 -8px; }
+.hud .cap { display: flex; align-items: center; gap: 10px; }
+.hud .snd { background: transparent; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); padding: 4px 8px; cursor: pointer; display: flex; align-items: center; }
+.hud .snd svg { width: 16px; height: 16px; }
+.charstage { display: grid; gap: 20px; align-items: start; }
+@media (min-width: 880px) { .charstage { grid-template-columns: 360px minmax(0, 1fr); gap: 28px; } .preview { position: sticky; top: 16px; } }
+.preview { display: grid; gap: 12px; justify-items: center; text-align: center; padding: 20px; border-radius: 16px; border: 1px solid rgba(227,182,91,.4);
+  background: radial-gradient(circle at 50% 40%, #1A4654, #0C232C 70%); }
+.preview .portrait { width: min(230px, 62vw); aspect-ratio: 1; border-radius: 50%; overflow: hidden; background: radial-gradient(circle at 50% 35%, #23596A, #0F2E3A);
+  border: 3px solid var(--brass); box-shadow: 0 0 0 6px rgba(227,182,91,.12), 0 20px 40px -20px #000; display: grid; place-items: end center; }
+.preview .portrait .avatar { width: 92%; animation: idle 3s ease-in-out infinite; transform-origin: 50% 100%; }
+@keyframes idle { 50% { transform: translateY(-4px) rotate(1deg); } }
+.preview .pname { font-family: var(--display); font-size: 34px; line-height: 1; color: var(--brass); }
+.opts { display: grid; gap: 16px; }
+.opt { display: grid; gap: 8px; border: 0; margin: 0; padding: 0; min-width: 0; }
+.opt legend { font-weight: 800; font-size: 15px; padding: 0; margin-bottom: 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chips button { font-size: 15px; font-weight: 700; padding: 8px 12px; border-radius: 999px; cursor: pointer; background: #0C232C; color: var(--bone); border: 1px solid rgba(157,178,179,.35); display: inline-flex; align-items: center; gap: 8px; transition: transform .12s; }
+.chips button:hover { transform: translateY(-2px); }
+.chips button[aria-pressed="true"] { border-color: var(--brass); background: rgba(227,182,91,.14); color: var(--brass); }
+.chips .sw { width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(255,255,255,.5); }
+.classes { display: grid; gap: 10px; grid-template-columns: 1fr; }
+@media (min-width: 560px) { .classes { grid-template-columns: 1fr 1fr; } }
+.classes button { text-align: left; cursor: pointer; padding: 12px 14px; border-radius: 12px; background: #0C232C; color: var(--bone); border: 1px solid rgba(157,178,179,.35); display: grid; gap: 2px; transition: transform .12s; }
+.classes button:hover { transform: translateY(-2px); }
+.classes button b { font-size: 17px; }
+.classes button .perk { font-family: var(--mono); font-size: 13px; color: var(--brass); }
+.classes button span { font-size: 14px; color: var(--muted); }
+.classes button[aria-pressed="true"] { border-color: var(--brass); background: rgba(227,182,91,.1); box-shadow: inset 0 0 0 1px var(--brass); }
+.clsbadge { font-family: var(--mono); font-size: 13px; padding: 3px 10px; border-radius: 999px; background: rgba(227,182,91,.15); color: var(--brass); border: 1px solid rgba(227,182,91,.5); }
+.toast { position: fixed; left: 50%; top: 70px; z-index: 70; transform: translateX(-50%); display: flex; gap: 10px; align-items: center; padding: 10px 16px 10px 12px; border-radius: 14px;
+  background: linear-gradient(180deg, #F6D88F, var(--brass)); color: #22180B; font-weight: 800; box-shadow: 0 14px 30px -10px rgba(0,0,0,.7); animation: toast 3.2s ease both; }
+.toast svg { width: 28px; height: 28px; color: #7A4F12; }
+.toast small { display: block; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 700; color: #5A4214; }
+@keyframes toast { 0% { opacity: 0; transform: translate(-50%, -20px) scale(.9); } 10%, 85% { opacity: 1; transform: translate(-50%, 0) scale(1); } 100% { opacity: 0; transform: translate(-50%, -10px); } }
+.badges { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.badge { display: grid; grid-template-columns: 34px 1fr; gap: 8px; align-items: center; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: rgba(10,29,38,.5); opacity: .45; }
+.badge svg { width: 30px; height: 30px; color: var(--muted); }
+.badge b { font-size: 14px; display: block; line-height: 1.2; }
+.badge span { font-size: 12px; color: var(--muted); line-height: 1.25; display: block; }
+.badge.on { opacity: 1; border-color: rgba(227,182,91,.6); background: rgba(227,182,91,.08); }
+.badge.on svg { color: var(--brass); filter: drop-shadow(0 0 6px rgba(227,182,91,.6)); }
+.hud[hidden] { display: none; }
+.hero-row { display: grid; grid-template-columns: 1fr; gap: 14px; justify-items: start; }
+@media (min-width: 560px) { .hero-row { grid-template-columns: 110px 1fr; align-items: center; } }
+.hero-row .portrait { width: 110px; aspect-ratio: 1; border-radius: 50%; overflow: hidden; border: 3px solid var(--brass); background: radial-gradient(circle at 50% 35%, #23596A, #0F2E3A); display: grid; place-items: end center; }
+.hero-row .portrait .avatar { width: 94%; }
+.codebox { font-family: var(--mono); font-size: 12px; word-break: break-all; padding: 8px 10px; border-radius: 8px; background: rgba(10,29,38,.7); border: 1px dashed rgba(227,182,91,.45); color: var(--muted); }
+.admin { max-width: 1000px; margin: 0 auto; display: grid; gap: 18px; }
+.admin textarea { width: 100%; min-height: 150px; font: 14px/1.4 var(--mono); color: var(--bone); background: #0C232C; border: 1px solid rgba(157,178,179,.4); border-radius: 10px; padding: 10px; }
+.admin .two { display: grid; gap: 16px; }
+@media (min-width: 760px) { .admin .two { grid-template-columns: 1fr 1fr; } }
+.sumrow { display: flex; gap: 10px; flex-wrap: wrap; }
+.sumrow div { padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line); background: rgba(17,48,60,.5); }
+.sumrow b { font-family: var(--mono); font-size: 22px; display: block; }
+.sumrow span { font-size: 13px; color: var(--muted); }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+table.lb { border-collapse: collapse; width: 100%; font-size: 15px; min-width: 620px; }
+table.lb th, table.lb td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); }
+table.lb th { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; background: rgba(17,48,60,.6); }
+table.lb td.n { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+table.lb tr:first-child td { color: var(--brass); font-weight: 700; }
+.who { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.who li { display: flex; justify-content: space-between; gap: 8px; padding: 6px 10px; border-radius: 8px; background: rgba(17,48,60,.45); font-size: 15px; }
+.who.yes li::before { content: "✓"; color: var(--brass); font-weight: 800; margin-right: 8px; }
+.who.no li::before { content: "✗"; color: var(--dead); font-weight: 800; margin-right: 8px; }
+.who li span:first-child { flex: 1; }
+.foot { text-align: center; font-size: 14px; color: var(--muted); margin-top: 8px; }
+.foot a { color: var(--muted); }
+.lbwrap { display: grid; gap: 12px; }
+.tabs { display: flex; gap: 6px; }
+.tabs button { font-weight: 800; font-size: 15px; padding: 8px 14px; border-radius: 999px; cursor: pointer; background: transparent; color: var(--muted); border: 1px solid var(--line); }
+.tabs button[aria-pressed="true"] { color: #22180B; background: var(--brass); border-color: var(--brass); }
+.lbrow { display: grid; grid-template-columns: 34px 40px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 12px; border-radius: 12px; background: rgba(17,48,60,.5); border: 1px solid var(--line); }
+.lbrow.me { border-color: var(--brass); background: rgba(227,182,91,.12); box-shadow: 0 0 0 1px var(--brass) inset; }
+.lbrow .pos { font-family: var(--mono); font-weight: 600; font-size: 15px; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); }
+.lbrow:nth-child(1) .pos { background: linear-gradient(180deg, #F6D88F, var(--brass)); color: #22180B; }
+.lbrow:nth-child(2) .pos { background: linear-gradient(180deg, #E8E8EC, #A9AEB8); color: #22180B; }
+.lbrow:nth-child(3) .pos { background: linear-gradient(180deg, #E2A877, #A8683A); color: #22180B; }
+.lbrow .face { width: 40px; height: 40px; border-radius: 50%; overflow: hidden; background: #12323E; border: 2px solid rgba(227,182,91,.6); }
+.lbrow .face .avatar { width: 54px; margin: -2px 0 0 -9px; }
+.lbrow .nm { min-width: 0; }
+.lbrow .nm b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lbrow .nm span { font-size: 13px; color: var(--muted); }
+.lbrow .sc { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.lbrow .sc b { display: block; font-size: 18px; color: var(--brass); }
+.lbrow .sc span { font-size: 12px; color: var(--muted); }
+.lbrows { display: grid; gap: 6px; }
+.lbrow.in { animation: fade .4s ease both; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="hud" id="hud" hidden></header>
+  <main id="view"></main>
+</div>
+<script>
+// 8 bölge × 5 kavram — anketlerdeki kavramlar. "clue" kavramı adını vermeden anlatır, "expl" kısa tanımdır.
+const REGIONS = [
+  { name: "Temel Koyu", cat: "Programlama Temelleri", concepts: [
+    { n: "Değişken", clue: "Programın hafızasında bir değeri saklayan, adı olan bir kutuyum. İçimdeki değer zamanla değişebilir.", expl: "Bir değeri bellekte saklamak için kullanılan, adı olan alan. Örnek: yas = 20" },
+    { n: "Veri Tipi (int, string)", clue: "Bir değerin sayı mı, metin mi, doğru/yanlış mı olduğunu ben belirlerim. Benim yüzümden \"5\" ile 5 aynı şey değildir.", expl: "Bir değerin türü: int tam sayı, float ondalıklı sayı, string metin, bool doğru/yanlış." },
+    { n: "Koşul İfadeleri (if/else)", clue: "Yol ayrımındaki tabela gibiyim: \"Şart sağlanıyorsa bu yoldan, sağlanmıyorsa öbür yoldan git\" derim.", expl: "Bir şarta göre farklı kodların çalışmasını sağlar. Örnek: not 50'den büyükse \"geçti\", değilse \"kaldı\"." },
+    { n: "Döngüler", clue: "Aynı işi tekrar tekrar yapmaktan hiç sıkılmam. Belli sayıda ya da bir şart sağlandığı sürece dönüp dururum.", expl: "Bir kod bloğunu tekrar tekrar çalıştırır. for belli sayıda, while şart sağlandıkça döner." },
+    { n: "Fonksiyon", clue: "Bana bir isim verip içime bir iş tarifi yazarsın. Ne zaman çağırırsan o işi yaparım; girdi alıp sonuç döndürebilirim.", expl: "Belirli bir işi yapan, adı olan ve tekrar tekrar çağrılabilen kod bloğu. Örnek: topla(a, b)" }
+  ]},
+  { name: "Algoritma Ormanı", cat: "Algoritma ve Veri Yapıları", concepts: [
+    { n: "Algoritma", clue: "Bir problemi çözmek için izlenen, sırası belli adımların listesiyim. Bir yemek tarifi de benim bir örneğimdir.", expl: "Bir problemi çözmek için izlenen sonlu ve sıralı adımlar dizisi." },
+    { n: "Dizi (Array)", clue: "Birçok değeri yan yana, sıra numarasıyla tutarım. İlk elemanımın numarası genelde 0'dır.", expl: "Birden fazla değeri sıralı tutan veri yapısı. Elemanlara indeksle erişilir. Örnek: notlar[0]" },
+    { n: "Sözde Kod (Pseudocode)", clue: "Ne Python'um ne Java. Algoritmayı hiçbir dilin kurallarına takılmadan, insan diline yakın biçimde yazarım.", expl: "Algoritmayı belirli bir programlama dilinin sözdizimine bağlı kalmadan, sade bir dille yazma yöntemi." },
+    { n: "Akış Diyagramı", clue: "Algoritmayı şekillerle çizerim: başlangıç ve bitiş için oval, işlem için dikdörtgen, karar için eşkenar dörtgen kullanırım.", expl: "Algoritmanın adımlarını şekiller ve oklarla gösteren görsel diyagram." },
+    { n: "Big O Notasyonu", clue: "Veri büyüdükçe bir algoritmanın ne kadar yavaşlayacağını anlatırım. O(1), O(n) ve O(n²) benim dilimdir.", expl: "Girdi büyüdükçe bir algoritmanın çalışma süresinin ya da bellek kullanımının nasıl arttığını gösteren gösterim." }
+  ]},
+  { name: "Nesne Kalesi", cat: "Nesne Yönelimli Programlama", concepts: [
+    { n: "Sınıf ve Nesne", clue: "Biri kalıp, diğeri o kalıptan çıkan kurabiye. \"Araba\" bir taslaksa, kapının önündeki kırmızı araba onun somut bir örneğidir.", expl: "Sınıf, nesnelerin şablonudur. Nesne, o şablondan oluşturulan somut örnektir." },
+    { n: "Kalıtım (Inheritance)", clue: "Çocuk sınıf, ebeveyn sınıfın özelliklerini ve metotlarını miras alır, aynı kodu tekrar yazmaya gerek kalmaz. \"Köpek bir Hayvan'dır\" derim.", expl: "Bir sınıfın başka bir sınıfın özelliklerini ve davranışlarını devralması." },
+    { n: "Kapsülleme (Encapsulation)", clue: "Verileri bir kapsülün içinde saklarım. Dışarıdan doğrudan değiştirilemezler, yalnızca izin verdiğim metotlarla erişilirler. Banka hesabındaki bakiye gibi.", expl: "Bir nesnenin verilerini gizleyip yalnızca kontrollü metotlarla erişime açmak." },
+    { n: "Çok Biçimlilik (Polymorphism)", clue: "Herkese aynı komutu verirsin ama herkes kendi bildiği gibi yapar: konus() dediğinde kedi miyavlar, köpek havlar.", expl: "Aynı isimli bir metodun farklı sınıflarda farklı davranabilmesi." },
+    { n: "Soyutlama (Abstraction)", clue: "Arabayı sürmek için motorun nasıl çalıştığını bilmen gerekmez; sana yalnızca direksiyonu ve pedalları gösteririm. Karmaşıklığı gizler, gerekeni öne çıkarırım.", expl: "Gereksiz detayları gizleyip yalnızca önemli özellikleri ve davranışları göstermek." }
+  ]},
+  { name: "Web Limanı", cat: "Web", concepts: [
+    { n: "Frontend", clue: "Kullanıcının gördüğü ve tıkladığı her şey benim işim: butonlar, renkler, menüler. Malzemelerim HTML, CSS ve JavaScript.", expl: "Bir uygulamanın kullanıcının gördüğü ve etkileşime girdiği arayüz kısmı." },
+    { n: "Backend", clue: "Perde arkasındayım: verileri saklar, iş kurallarını uygular, kullanıcının göremediği sunucu tarafında çalışırım. Restoranın mutfağı gibiyim.", expl: "Uygulamanın sunucu tarafı. İş mantığı, veritabanı işlemleri ve güvenlik burada çalışır." },
+    { n: "HTTP ve İstek / Yanıt", clue: "Tarayıcı ile sunucunun konuştuğu dilim. Biri GET ya da POST ile sorar, diğeri 200 ya da 404 gibi kodlarla cevap verir.", expl: "Web'de istemci ile sunucu arasındaki iletişim protokolü. İstemci istek gönderir, sunucu yanıt döner." },
+    { n: "API", clue: "İki yazılımın konuşmasını sağlayan bir garson gibiyim: siparişini alır, mutfağa iletir, cevabı sana getiririm.", expl: "Yazılımların birbiriyle iletişim kurmasını sağlayan arayüz. Hangi isteğin nasıl yapılacağını tanımlar." },
+    { n: "JSON", clue: "Süslü parantezler ve anahtar-değer çiftleriyle veri taşırım: {\"isim\": \"Ayşe\", \"yas\": 21}. API'lerin en sevdiği formatım.", expl: "Verileri anahtar-değer çiftleri hâlinde taşıyan, hafif ve okunabilir veri formatı." }
+  ]},
+  { name: "Veri Mağarası", cat: "Veritabanları", concepts: [
+    { n: "Veritabanı", clue: "Verileri düzenli ve kalıcı biçimde saklayan dijital bir arşivim. Program kapansa bile bilgiler bende kaybolmaz.", expl: "Verilerin düzenli, kalıcı ve sorgulanabilir biçimde saklandığı sistem." },
+    { n: "SQL", clue: "Tablolarla konuşmanın diliyim. SELECT * FROM uyeler WHERE yas > 18 dediğinde ne istediğini anlarım.", expl: "İlişkisel veritabanlarında veriyi sorgulamak ve yönetmek için kullanılan dil." },
+    { n: "NoSQL", clue: "Satır ve sütunlu katı tablolara bağlı kalmam. Verileri belge, anahtar-değer ya da grafik olarak esnekçe saklarım. MongoDB benim ailemden.", expl: "Tablo yapısına bağlı olmayan, esnek veri modelleri kullanan veritabanları." },
+    { n: "CRUD İşlemleri", clue: "Verilerle yapılabilecek dört temel işin baş harfleriyim: oluştur, oku, güncelle, sil.", expl: "Create, Read, Update, Delete: verilerle yapılan dört temel işlem." },
+    { n: "Önbellek (Cache)", clue: "Sık istenen verileri el altında tutarım ki her seferinde uzaktaki kaynağa gidilmesin. Sayfalar benim sayemde daha hızlı açılır.", expl: "Sık kullanılan verileri hızlı erişim için geçici olarak saklayan katman." }
+  ]},
+  { name: "Araç Çarşısı", cat: "Geliştirici Araçları", concepts: [
+    { n: "Git", clue: "Kodunun zaman makinesiyim. Her değişikliği kaydederim; hata yaparsan eski bir sürüme geri dönebilirsin.", expl: "Kodda yapılan değişiklikleri takip eden sürüm kontrol sistemi." },
+    { n: "GitHub ve Pull Request", clue: "Kodların bulutta buluştuğu platformum. Değişikliğini ana koda eklemeden önce \"Şunu inceleyip ekler misiniz?\" diye bir talep açarsın.", expl: "GitHub, Git depolarını barındıran platformdur. Pull Request, bir değişikliğin incelenip ana koda eklenmesi için açılan taleptir." },
+    { n: "IDE", clue: "Kod yazmak, çalıştırmak ve hata ayıklamak için her şeyin tek yerde olduğu çalışma masasıyım. PyCharm ve Visual Studio benim örneklerim.", expl: "Kod yazma, çalıştırma ve hata ayıklama araçlarını bir arada sunan geliştirme ortamı." },
+    { n: "Debugging", clue: "Programdaki böcekleri avlarım. Kodu satır satır durdurur, değişkenlerin değerine bakarak hatanın yerini bulurum.", expl: "Koddaki hataları bulma ve düzeltme süreci." },
+    { n: "Terminal / Komut Satırı", clue: "Fare yok, düğme yok; yalnızca yazdığın komutlar var. cd, ls, git push… Bilgisayara metinle emir verirsin.", expl: "Bilgisayarı metin tabanlı komutlarla yönetmeye yarayan arayüz." }
+  ]},
+  { name: "Bulut Tepesi", cat: "Çeşitli Alanlar", concepts: [
+    { n: "Derleyici ve Yorumlayıcı", clue: "İkimiz de yazdığın kodu bilgisayarın anlayacağı dile çeviririz. Biri tüm kodu önceden çevirir, diğeri satır satır çevirip hemen çalıştırır.", expl: "Derleyici kodun tamamını önceden makine diline çevirir (ör. C). Yorumlayıcı kodu satır satır çevirip çalıştırır (ör. Python)." },
+    { n: "Framework ve Kütüphane", clue: "Birinde kontrol sendedir, ihtiyacın olunca çağırırsın. Diğerinde iskelet ve kurallar hazırdır, sen boşlukları doldurursun. Bu ikisinin farkıyım.", expl: "Kütüphaneyi sen çağırırsın (ör. NumPy). Framework iskeleti kurar ve senin kodunu o çağırır (ör. Django)." },
+    { n: "Bulut Bilişim (Cloud)", clue: "Sunucu satın almana gerek yok. İşlem gücünü ve depolamayı internet üzerinden kiralarsın, kullandığın kadar ödersin.", expl: "Sunucu, depolama ve yazılım gibi kaynakların internet üzerinden hizmet olarak kullanılması." },
+    { n: "Docker / Container", clue: "\"Benim bilgisayarımda çalışıyordu!\" sorununu çözerim. Uygulamayı bütün bağımlılıklarıyla bir kutuya koyarım; nerede açılırsa açılsın aynı çalışır.", expl: "Uygulamayı ve bağımlılıklarını izole bir paket (container) içinde çalıştırıp her ortamda aynı şekilde çalışmasını sağlayan teknoloji." },
+    { n: "Yapay Zekâ ve LLM", clue: "Devasa miktarda metinle eğitildim. Sorularını cevaplar, metin ve kod yazarım; ama bazen emin olmadığım şeyleri uydurabilirim.", expl: "Yapay zekâ, insan zekâsı gerektiren işleri yapan sistemlerdir. LLM, büyük metin verisiyle eğitilmiş, dili anlayıp üretebilen modeldir." }
+  ]},
+  { name: "Güvenlik Kulesi", cat: "Kalite ve Güvenlik", concepts: [
+    { n: "Clean Code", clue: "Kodun yalnızca çalışması yetmez, kolay okunmalı da derim. Anlamlı değişken adları, kısa fonksiyonlar, gereksiz tekrar yok.", expl: "Okunabilir, anlaşılır ve bakımı kolay kod yazma prensipleri." },
+    { n: "Birim Testi (Unit Test)", clue: "Kodun en küçük parçalarını tek tek sınarım: \"topla(2, 3) gerçekten 5 döndürüyor mu?\" diye kontrol ederim.", expl: "Kodun küçük bir parçasının (genelde bir fonksiyonun) doğru çalıştığını otomatik olarak doğrulayan test." },
+    { n: "Refactoring", clue: "Kodun dışarıdan görünen davranışını değiştirmeden içini düzenlerim. Evi yıkmadan yeniden dekore etmek gibi.", expl: "Kodun işlevini değiştirmeden yapısını iyileştirme." },
+    { n: "Kimlik Doğrulama ve Yetkilendirme", clue: "İkimiz kapıda nöbet tutarız. Biri \"Sen kimsin?\" diye sorar, diğeri \"Buraya girmeye iznin var mı?\" diye.", expl: "Kimlik doğrulama kullanıcının kim olduğunu doğrular. Yetkilendirme o kullanıcının neye erişebileceğini belirler." },
+    { n: "Hashing ve Şifreleme", clue: "Biri veriyi geri döndürülemez bir parmak izine çevirir, diğeri anahtarla kilitler ve anahtarla geri açar. Şifreler veritabanında benim sayemde düz metin durmaz.", expl: "Hashing tek yönlüdür, geri çevrilemez (şifre saklamak için). Şifreleme anahtarla geri çözülebilir (veriyi korumak için)." }
+  ]}
+];
+
+/* ---------- karakter ---------- */
+const SKINS = ["#F3D3B8", "#E6B48F", "#C98E62", "#9A6440", "#6B4429"];
+const OUTFITS = [["Lacivert", "#2E4A7A"], ["Bordo", "#7A2E3A"], ["Zeytin", "#556B2F"], ["Mor", "#5B3F8C"], ["Turuncu", "#C2622D"], ["Kömür", "#2A2A2E"]];
+const HATS = [["tricorn", "Korsan şapkası"], ["captain", "Kaptan şapkası"], ["bandana", "Bandana"], ["hood", "Kapüşon"], ["phones", "Kulaklık"], ["none", "Şapkasız"]];
+const FACES = [["none", "Sade"], ["patch", "Göz bandı"], ["glasses", "Gözlük"]];
+const BEARDS = [["none", "Yok"], ["beard", "Sakal"], ["mustache", "Bıyık"]];
+const PETS = [["none", "Yok"], ["parrot", "Papağan"], ["robot", "Robot"]];
+const CLASSES = [
+  { id: "rotaci", name: "Rotacı", perk: "+1 pusula hakkı", desc: "Haritayı ezbere bilir, kaybolmaz." },
+  { id: "hizli", name: "Hızlı Kodcu", perk: "Fitil 40 saniye yanar", desc: "Klavyesi alev alır, hiç acele etmez." },
+  { id: "bug", name: "Bug Avcısı", perk: "Her bölgede ilk hata seriyi bozmaz", desc: "Hatayı görür, panik yapmaz." },
+  { id: "hazine", name: "Hazine Avcısı", perk: "Her doğru cevapta +15 puan", desc: "Altının kokusunu uzaktan alır." }
+];
+const defaultChar = () => ({ skin: 1, hat: "tricorn", face: "none", beard: "none", outfit: 0, pet: "parrot", cls: "rotaci" });
+const clsOf = id => CLASSES.find(c => c.id === id) || CLASSES[0];
+function shade(hex, k) { const n = parseInt(hex.slice(1), 16); const f = v => Math.max(0, Math.min(255, Math.round(v * k))); return "#" + [n >> 16, (n >> 8) & 255, n & 255].map(v => f(v).toString(16).padStart(2, "0")).join(""); }
+
+function avatarSVG(ch, cls = "") {
+  ch = ch || defaultChar();
+  const skin = SKINS[ch.skin] || SKINS[1], out = (OUTFITS[ch.outfit] || OUTFITS[0])[1], dark = shade(out, .7);
+  let back = "", hat = "", face = "", beard = "", pet = "";
+  if (ch.hat === "hood") back = `<path d="M24,72 Q22,28 60,26 Q98,28 96,72 Q96,96 60,100 Q24,96 24,72Z" fill="${dark}"/>`;
+  const hair = ch.hat === "none" || ch.hat === "phones" ? `<path d="M32,60 Q32,30 60,30 Q88,30 88,60 Q80,44 60,44 Q40,44 32,60Z" fill="#3B2A1C"/>` : "";
+  if (ch.hat === "tricorn") hat = `<path d="M18,50 Q60,6 102,50 Q84,40 60,42 Q36,40 18,50Z" fill="#231910"/><path d="M26,46 Q60,34 94,46" stroke="#E3B65B" stroke-width="2.5" fill="none"/><path d="M55,25 l10,10 M65,25 l-10,10" stroke="#EDE5D0" stroke-width="2.5" stroke-linecap="round"/>`;
+  if (ch.hat === "captain") hat = `<path d="M30,48 Q60,20 90,48 L90,52 L30,52Z" fill="#EDE5D0"/><path d="M27,51 Q60,60 93,51 L93,56 Q60,64 27,56Z" fill="#1A1A1A"/><circle cx="60" cy="40" r="5" fill="#E3B65B"/>`;
+  if (ch.hat === "bandana") hat = `<path d="M31,54 Q32,30 60,30 Q88,30 89,54 Q60,44 31,54Z" fill="#B8432F"/><circle cx="48" cy="40" r="2" fill="#EDE5D0"/><circle cx="66" cy="37" r="2" fill="#EDE5D0"/><circle cx="76" cy="45" r="2" fill="#EDE5D0"/><path d="M86,48 l14,4 l-6,8 Z M86,50 l10,12 l-8,2Z" fill="#9E3826"/>`;
+  if (ch.hat === "hood") hat = `<path d="M30,60 Q30,34 60,33 Q90,34 90,60 Q84,44 60,42 Q36,44 30,60Z" fill="${out}"/><path d="M52,98 l-2,14 M68,98 l2,14" stroke="#EDE5D0" stroke-width="2" stroke-linecap="round"/>`;
+  if (ch.hat === "phones") hat = `<path d="M30,64 Q28,26 60,26 Q92,26 90,64" stroke="#222" stroke-width="6" fill="none"/><rect x="22" y="56" width="12" height="20" rx="5" fill="#E3B65B" stroke="#222" stroke-width="3"/><rect x="86" y="56" width="12" height="20" rx="5" fill="#E3B65B" stroke="#222" stroke-width="3"/>`;
+  if (ch.face === "patch") face = `<path d="M30,52 L90,66" stroke="#111" stroke-width="2.5"/><ellipse cx="71" cy="63" rx="8" ry="7" fill="#111"/>`;
+  if (ch.face === "glasses") face = `<rect x="40" y="56" width="16" height="12" rx="4" fill="rgba(160,215,220,.25)" stroke="#1A1A1A" stroke-width="2.5"/><rect x="64" y="56" width="16" height="12" rx="4" fill="rgba(160,215,220,.25)" stroke="#1A1A1A" stroke-width="2.5"/><path d="M56,61 h8" stroke="#1A1A1A" stroke-width="2.5"/>`;
+  if (ch.beard === "beard") beard = `<path d="M34,66 Q36,94 60,96 Q84,94 86,66 Q78,82 60,84 Q42,82 34,66Z" fill="#4A3424"/>`;
+  if (ch.beard === "mustache") beard = `<path d="M48,75 Q54,69 60,74 Q66,69 72,75 Q66,79 60,76 Q54,79 48,75Z" fill="#4A3424"/>`;
+  if (ch.pet === "parrot") pet = `<g transform="translate(97,96)"><path d="M-6,8 q-4,16 -10,22 q10,-4 14,-14Z" fill="#2E7D4F"/><ellipse cx="0" cy="4" rx="9" ry="12" fill="#3FA56A"/><circle cx="2" cy="-9" r="7" fill="#E04F3A"/><path d="M8,-10 q7,2 4,8 q-3,-3 -5,-3Z" fill="#F2B33D"/><circle cx="4" cy="-10" r="1.6" fill="#111"/></g>`;
+  if (ch.pet === "robot") pet = `<g transform="translate(100,96)"><path d="M0,-18 v-6" stroke="#9DB2B3" stroke-width="2"/><circle cx="0" cy="-25" r="2.5" fill="#E07A5F"/><rect x="-10" y="-18" width="20" height="16" rx="4" fill="#9DB2B3" stroke="#3B4A55" stroke-width="2"/><circle cx="-4" cy="-10" r="2" fill="#7FE0E0"/><circle cx="4" cy="-10" r="2" fill="#7FE0E0"/><rect x="-8" y="0" width="16" height="14" rx="3" fill="#7C8F98" stroke="#3B4A55" stroke-width="2"/></g>`;
+  const eyes = ch.face === "patch" ? `<circle cx="49" cy="62" r="3.2" fill="#1A1208"/>` : `<circle cx="49" cy="62" r="3.2" fill="#1A1208"/><circle cx="71" cy="62" r="3.2" fill="#1A1208"/>`;
+  return `<svg class="avatar ${cls}" viewBox="0 0 120 140" aria-hidden="true">
+    ${back}
+    <path d="M18,140 C18,108 38,98 60,98 C82,98 102,108 102,140 Z" fill="${out}"/>
+    <path d="M48,98 L60,116 L72,98" fill="${dark}"/>
+    <rect x="52" y="84" width="16" height="16" fill="${shade(skin, .9)}"/>
+    <circle cx="31" cy="66" r="6" fill="${shade(skin, .92)}"/><circle cx="89" cy="66" r="6" fill="${shade(skin, .92)}"/>
+    <circle cx="60" cy="64" r="28" fill="${skin}"/>
+    ${hair}${eyes}
+    <circle cx="44" cy="72" r="4" fill="#E07A5F" opacity=".25"/><circle cx="76" cy="72" r="4" fill="#E07A5F" opacity=".25"/>
+    ${beard}
+    <path d="M52,78 Q60,84 68,78" stroke="#5A2E1E" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+    ${face}${hat}${pet}
+  </svg>`;
+}
+
+/* ---------- rozetler ---------- */
+const ACH = [
+  { id: "perfect", name: "Kusursuz Rota", desc: "Bütün yol ayrımlarında ilk denemede doğru" },
+  { id: "region", name: "Bölge Fatihi", desc: "Bir bölgeyi hatasız geçtin" },
+  { id: "flash", name: "Şimşek", desc: "Bir ipucunu 4 saniyeden kısa sürede çözdün" },
+  { id: "streak8", name: "Seri Ustası", desc: "Art arda 8 doğru" },
+  { id: "nocompass", name: "Pusulasız Denizci", desc: "Hiç pusula kullanmadan bitirdin" },
+  { id: "codebreaker", name: "Kod Kırıcı", desc: "Sandığı ilk denemede açtın" },
+  { id: "storm", name: "Fırtına Gazisi", desc: "Fırtınaya yakalandın ama hazineye ulaştın" }
+];
+const BADGE_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.9 6.2 6.8.8-5 4.6 1.4 6.7L12 17l-6.1 3.3 1.4-6.7-5-4.6 6.8-.8z" fill="currentColor"/></svg>';
+function award(id) {
+  if (!state.ach || state.ach.includes(id)) return;
+  state.ach.push(id);
+  const a = ACH.find(x => x.id === id); if (!a) return;
+  snd("badge");
+  const t = document.createElement("div");
+  t.className = "toast"; t.setAttribute("role", "status");
+  t.innerHTML = `${BADGE_SVG}<span><small>Rozet kazandın</small>${esc(a.name)}</span>`;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 3200);
+}
+
+/* ---------- ses ---------- */
+const SND = { ctx: null, on: true };
+try { SND.on = localStorage.getItem("kh-sound") !== "off"; } catch (e) {}
+function snd(kind) {
+  if (!SND.on) return;
+  try {
+    if (!SND.ctx) SND.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const c = SND.ctx; if (c.state === "suspended") c.resume();
+    const seq = { right: [[523, .08], [659, .08], [784, .16]], wrong: [[180, .12], [120, .22]], tick: [[1200, .03]], coin: [[988, .06], [1319, .14]],
+      open: [[392, .1], [523, .1], [659, .1], [784, .1], [1047, .35]], badge: [[784, .08], [1175, .18]], storm: [[110, .4]], click: [[660, .04]] }[kind] || [];
+    const type = kind === "wrong" || kind === "storm" ? "sawtooth" : kind === "tick" || kind === "click" ? "square" : "triangle";
+    let t = c.currentTime;
+    seq.forEach(([f, d]) => {
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = type; o.frequency.setValueAtTime(f, t);
+      if (kind === "storm") o.frequency.exponentialRampToValueAtTime(55, t + d);
+      g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(kind === "tick" ? .05 : .12, t + .01); g.gain.exponentialRampToValueAtTime(.0001, t + d);
+      o.connect(g).connect(c.destination); o.start(t); o.stop(t + d + .02); t += d * .9;
+    });
+  } catch (e) {}
+}
+
+const normName = s => String(s).toLocaleLowerCase("tr").replace(/ı/g, "i").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+const dayStamp = () => Math.floor(Date.now() / 86400000);
+
+
+/* ================================================================
+   SKOR TABLOSU (Firebase Firestore)
+   Firebase konsolundaki firebaseConfig nesnesini aşağıya yapıştır.
+   ================================================================ */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAtBwhafnx-jNF9XxLTU3lXvWycL2dCQNc",
+  authDomain: "kavram-hazinesi.firebaseapp.com",
+  projectId: "kavram-hazinesi",
+  storageBucket: "kavram-hazinesi.firebasestorage.app",
+  messagingSenderId: "635537254336",
+  appId: "1:635537254336:web:e13333033b6ea5a2920a25"
+};
+
+const LB = { db: null, ready: false, err: "", data: { short: null, long: null }, unsub: {}, tab: "short", slow: {} };
+function lbInit() {
+  try {
+    if (!FIREBASE_CONFIG) { LB.err = "noconfig"; return; }
+    if (!window.firebase) { LB.err = "noload"; return; }
+    if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+    LB.db = firebase.firestore(); LB.ready = true;
+  } catch (e) { LB.err = "noload"; }
+}
+function lbSubscribe(mode) {
+  if (!LB.ready || LB.unsub[mode]) return;
+  LB.slow[mode] = setTimeout(() => { LB.slow[mode] = "late"; refreshLB(); }, 10000);
+  LB.unsub[mode] = LB.db.collection("scores_" + mode).orderBy("score", "desc").limit(300).onSnapshot(snap => {
+    clearTimeout(LB.slow[mode]); LB.slow[mode] = 0;
+    LB.data[mode] = snap.docs.map(d => ({ id: d.id, ...d.data() })); refreshLB();
+  }, () => { clearTimeout(LB.slow[mode]); LB.err = "read"; refreshLB(); });
+}
+const ALLOWED = { hat: HATS.map(h => h[0]), face: FACES.map(h => h[0]), beard: BEARDS.map(h => h[0]), pet: PETS.map(h => h[0]), cls: CLASSES.map(c => c.id) };
+function safeChar(c) {
+  c = c && typeof c === "object" ? c : {};
+  const int = (v, n) => Number.isInteger(v) && v >= 0 && v < n ? v : 0;
+  const pick = (v, k) => ALLOWED[k].includes(v) ? v : ALLOWED[k][0];
+  return { skin: int(c.skin, SKINS.length), outfit: int(c.outfit, OUTFITS.length), hat: pick(c.hat, "hat"), face: pick(c.face, "face"), beard: pick(c.beard, "beard"), pet: pick(c.pet, "pet"), cls: pick(c.cls, "cls") };
+}
+function lbSubmit() {
+  if (!LB.ready || state.submitted) return;
+  state.submitted = "pending";
+  const rec = resultRecord();
+  LB.db.collection("scores_" + state.mode).add({
+    name: rec.name, nameKey: normName(rec.name), char: safeChar(state.char), cls: rec.cls, mode: rec.mode, score: rec.score,
+    firsts: rec.firsts, total: rec.total, best: rec.best, secs: rec.secs, ach: rec.ach.length,
+    ts: firebase.firestore.FieldValue.serverTimestamp()
+  }).then(ref => { state.submitted = "ok"; state.myDocId = ref.id; refreshLB(); })
+    .catch(() => { state.submitted = "fail"; refreshLB(); });
+}
+function lbRows(mode) {
+  const seen = new Set(), rows = [];
+  (LB.data[mode] || []).forEach(r => {
+    if (typeof r.score !== "number" || typeof r.name !== "string") return;
+    const k = r.nameKey || normName(r.name);
+    if (seen.has(k)) return; seen.add(k); rows.push(r);
+  });
+  return rows;
+}
+function lbHTML() {
+  const mode = LB.tab;
+  const tabs = `<div class="tabs" role="group" aria-label="Rota">${[["short", "Kısa rota"], ["long", "Büyük keşif"]].map(([m, l]) => `<button type="button" data-tab="${m}" aria-pressed="${mode === m}">${l}</button>`).join("")}</div>`;
+  let body;
+  if (LB.err === "noconfig") body = `<p class="muted" style="margin:0">Skor tablosu henüz bir veritabanına bağlanmadı. Kurulum tamamlanınca burada herkesin skoru görünecek.</p>`;
+  else if (LB.err === "noload" || LB.err === "read") body = `<p class="muted" style="margin:0">Skor tablosuna şu an ulaşılamıyor. İnternet bağlantını kontrol edip sayfayı yenile.</p>`;
+  else if (!LB.data[mode]) body = `<p class="muted" style="margin:0">${LB.slow[mode] === "late" ? "Tablo geç yükleniyor, bağlantı yavaş olabilir." : "Tablo yükleniyor…"}</p>`;
+  else {
+    const rows = lbRows(mode), myKey = normName(state.name || "");
+    const meName = state.view === "result" && state.mode === mode;
+    body = rows.length ? `<p class="muted" style="margin:0">${rows.length} kaptan bu rotayı tamamladı.</p><div class="lbrows">${rows.slice(0, 100).map((r, i) => {
+      const me = r.id === state.myDocId || (meName && (r.nameKey || normName(r.name)) === myKey);
+      const ch = safeChar(r.char);
+      return `<div class="lbrow ${me ? "me" : ""}"><span class="pos">${i + 1}</span><span class="face">${avatarSVG(ch)}</span>
+        <span class="nm"><b>${esc(r.name)}${me ? " (sen)" : ""}</b><span>${esc(clsOf(ch.cls).name)} · ${+r.firsts || 0}/${+r.total || 0} doğru · seri ${+r.best || 0} · ${+r.ach || 0} rozet</span></span>
+        <span class="sc"><b>${r.score}</b><span>${fmtTime((+r.secs || 0) * 1000)}</span></span></div>`;
+    }).join("")}</div>` : `<p class="muted" style="margin:0">Bu rotada henüz kimse hazineye ulaşmadı. İlk sen ol!</p>`;
+  }
+  let status = "";
+  if (state.view === "result") status = state.submitted === "ok" ? `<p style="margin:0;color:var(--brass);font-weight:700">Skorun tabloya kaydedildi.</p>`
+    : state.submitted === "pending" ? `<p class="muted" style="margin:0">Skorun kaydediliyor…</p>`
+    : state.submitted === "fail" ? `<p style="margin:0;color:var(--dead)">Skorun kaydedilemedi. İnternet bağlantını kontrol et ve "Tekrar kaydet"e bas.</p><div class="row"><button class="btn ghost" id="resubmit">Tekrar kaydet</button></div>` : "";
+  return `${tabs}${status}${body}`;
+}
+function refreshLB() {
+  const box = $("#lb"); if (!box) return;
+  box.innerHTML = lbHTML();
+  box.querySelectorAll("[data-tab]").forEach(b => b.addEventListener("click", () => { LB.tab = b.dataset.tab; lbSubscribe(LB.tab); refreshLB(); }));
+  const rs = $("#resubmit", box); rs && rs.addEventListener("click", () => { state.submitted = ""; lbSubmit(); refreshLB(); });
+}
+function mountLB() { lbSubscribe(LB.tab); refreshLB(); }
+
+
+const WORD = ["D", "E", "Ğ", "İ", "Ş", "K", "E", "N"];
+const WORD_STR = WORD.join("");
+const TIME = 30000; // her yol ayrımı için süre (ms)
+const REDUCED = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+const COMPASS_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9.5"/><path d="M15.5 8.5l-2 5-5 2 2-5z" fill="currentColor" stroke="none"/></svg>';
+
+let state = freshState();
+
+function freshState() {
+  return { v: 3, submitted: "", myDocId: null, char: defaultChar(), ach: [], fastest: 99999, bugUsed: false, streak: 0, bestStreak: 0, lockFails: 0, view: "intro", name: "", mode: "short", plan: [], letters: [], done: 0, region: 0, qi: 0,
+           q: null, score: 0, maxScore: 0, compass: 0, compassUsed: 0, log: [], t0: 0, t1: 0,
+           animFrom: null, lock: [], lockTiles: [], lockMsg: "" };
+}
+
+/* ---------- yardımcılar ---------- */
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+const C = (r, c) => REGIONS[r].concepts[c];
+function fmtTime(ms) { const s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+
+/* ---------- oyun kurulumu ---------- */
+const timeFor = () => state.char && state.char.cls === "hizli" ? 40000 : TIME;
+function newGame(name, mode, char) {
+  const per = mode === "long" ? 5 : 2;
+  const perm = shuffle(WORD.map((_, i) => i));
+  const plan = REGIONS.map((reg, r) => shuffle(reg.concepts.map((_, i) => i)).slice(0, per).map(ci => {
+    const others = shuffle(reg.concepts.map((_, i) => i).filter(i => i !== ci)).slice(0, 3);
+    return { c: ci, opts: shuffle([ci, ...others]) };
+  }));
+  state = freshState();
+  Object.assign(state, { view: "map", name, mode, char: char || defaultChar(), plan, letters: perm.map(i => WORD[i]),
+    compass: (mode === "long" ? 4 : 2) + ((char && char.cls) === "rotaci" ? 1 : 0),
+    maxScore: plan.reduce((s, r) => s + r.length * 250, 0), t0: Date.now() });
+}
+
+function startQuestion() {
+  const item = state.plan[state.region][state.qi];
+  state.q = { c: item.c, opts: item.opts, wrong: [], closed: [], usedCompass: false, solved: false, gained: 0,
+    deadline: Date.now() + timeFor(), started: Date.now(), fresh: true, timedOut: false, hit: null, win: false, speed: 0, mult: 1 };
+  state.view = "question";
+}
+
+/* ---------- harita çizimi ---------- */
+const CX = 500, CY = 500;
+function islandR(t) { return 405 * (1 + .07 * Math.sin(3 * t + 1.1) + .05 * Math.sin(5 * t + 2.3) + .035 * Math.sin(7 * t + .4) + .02 * Math.sin(11 * t + 2.9)); }
+function nodes() {
+  const t0 = 2.55, pts = [];
+  pts.push({ x: CX + Math.cos(t0) * (islandR(t0) + 45), y: CY + Math.sin(t0) * (islandR(t0) + 45) });
+  for (let i = 1; i <= 8; i++) { const t = t0 + i * 1.22, r = 300 - (i - 1) * 25; pts.push({ x: CX + Math.cos(t) * r, y: CY + Math.sin(t) * r }); }
+  pts.push({ x: CX + 6, y: CY + 4 });
+  return pts;
+}
+function catmull(p) {
+  let d = `M${p[0].x.toFixed(1)},${p[0].y.toFixed(1)}`;
+  for (let i = 0; i < p.length - 1; i++) {
+    const p0 = p[i - 1] || p[i], p1 = p[i], p2 = p[i + 1], p3 = p[i + 2] || p2;
+    const c1 = { x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6 };
+    const c2 = { x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6 };
+    d += ` C${c1.x.toFixed(1)},${c1.y.toFixed(1)} ${c2.x.toFixed(1)},${c2.y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+  }
+  return d;
+}
+function ringPath(ctx, f) {
+  ctx.beginPath();
+  for (let k = 0; k <= 360; k++) { const t = k / 360 * Math.PI * 2, r = f(t); const x = CX + Math.cos(t) * r, y = CY + Math.sin(t) * r; k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+  ctx.closePath();
+}
+function drawSea(cv) {
+  const w = cv.clientWidth, dpr = Math.min(2, window.devicePixelRatio || 1);
+  if (!w) return;
+  cv.width = w * dpr; cv.height = w * dpr;
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(w * dpr / 1000, 0, 0, w * dpr / 1000, 0, 0);
+  const g = ctx.createRadialGradient(500, 470, 80, 500, 500, 720);
+  g.addColorStop(0, "#164452"); g.addColorStop(.55, "#0F2E3A"); g.addColorStop(1, "#071820");
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 1000, 1000);
+  // grid + hex coordinates
+  ctx.strokeStyle = "rgba(157,200,205,.07)"; ctx.lineWidth = 1.2;
+  ctx.font = "600 17px 'IBM Plex Mono', monospace"; ctx.fillStyle = "rgba(157,200,205,.38)";
+  for (let i = 1; i < 8; i++) {
+    const p = i * 125;
+    ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, 1000); ctx.moveTo(0, p); ctx.lineTo(1000, p); ctx.stroke();
+    const lab = "0x" + (i * 16).toString(16).toUpperCase().padStart(2, "0");
+    ctx.fillText(lab, p + 6, 22); ctx.fillText(lab, 8, p - 6);
+  }
+  // shallow water + depth contours
+  ringPath(ctx, t => islandR(t) + 42); ctx.fillStyle = "rgba(86,160,165,.13)"; ctx.fill();
+  for (let k = 1; k <= 6; k++) {
+    ringPath(ctx, t => islandR(t + k * .04) + 18 + k * 26 + 6 * Math.sin(4 * t + k));
+    ctx.strokeStyle = `rgba(120,195,200,${.2 - k * .028})`; ctx.lineWidth = 1.6; ctx.stroke();
+  }
+  // island: beach then land
+  ringPath(ctx, islandR); ctx.fillStyle = "#B9A677"; ctx.fill();
+  ringPath(ctx, t => islandR(t) - 13);
+  const lg = ctx.createRadialGradient(500, 480, 30, 500, 500, 420);
+  lg.addColorStop(0, "#3C4A35"); lg.addColorStop(1, "#273328");
+  ctx.fillStyle = lg; ctx.fill();
+  for (let k = 1; k <= 5; k++) {
+    ringPath(ctx, t => (islandR(t + k * .3) - 13) * (1 - k * .16) + 5 * Math.sin(6 * t + k));
+    ctx.strokeStyle = `rgba(214,200,150,${.16 - k * .02})`; ctx.lineWidth = 1.4; ctx.stroke();
+  }
+  // compass rose (K = kuzey)
+  ctx.save(); ctx.translate(890, 885); ctx.strokeStyle = "rgba(227,182,91,.55)"; ctx.fillStyle = "rgba(227,182,91,.55)"; ctx.lineWidth = 1.6;
+  ctx.beginPath(); ctx.arc(0, 0, 52, 0, Math.PI * 2); ctx.stroke();
+  for (let i = 0; i < 8; i++) {
+    const a = i * Math.PI / 4 - Math.PI / 2, L = i % 2 ? 40 : 66;
+    ctx.beginPath(); ctx.moveTo(Math.cos(a) * L, Math.sin(a) * L); ctx.lineTo(Math.cos(a + .3) * 10, Math.sin(a + .3) * 10); ctx.lineTo(Math.cos(a - .3) * 10, Math.sin(a - .3) * 10); ctx.closePath();
+    i === 0 ? ctx.fill() : ctx.stroke();
+  }
+  ctx.font = "26px 'Pirata One', Georgia, serif"; ctx.textAlign = "center"; ctx.fillText("K", 0, -74);
+  ctx.restore();
+}
+
+function chartHTML() {
+  const P = nodes();
+  const next = state.done + 1; // 1..8 bölge, 9 hazine
+  let marks = "";
+  for (let i = 1; i <= 8; i++) {
+    const cls = i <= state.done ? "done" : i === next ? "next" : "";
+    marks += `<g class="node ${cls}" transform="translate(${P[i].x.toFixed(1)},${P[i].y.toFixed(1)})">
+      ${i === next ? '<circle class="pulse" r="30"/>' : ""}<circle class="disc" r="30"/><text>${i}</text></g>`;
+  }
+  const T = P[9];
+  const tNext = next === 9;
+  const lab = (p, text, cls = "") => {
+    const right = p.x < 560; const x = right ? p.x + 46 : p.x - 46;
+    return `<text class="maplabel ${cls}" x="${x.toFixed(1)}" y="${(p.y + 12).toFixed(1)}" text-anchor="${right ? "start" : "end"}">${esc(text)}</text>`;
+  };
+  let label = "";
+  if (next <= 8) label = `<text class="maplabel" id="regLabel" data-idx="${next}" x="${P[next].x.toFixed(1)}" y="${P[next].y.toFixed(1)}">${esc(REGIONS[next - 1].name)}</text>`;
+  return `<div class="chart" aria-label="Kod Adası haritası: ${state.done} / 8 bölge tamamlandı" role="img">
+    <canvas></canvas>
+    <svg viewBox="0 0 1000 1000" aria-hidden="true">
+      <g class="waves">${[[70,90],[860,140],[930,520],[60,430],[150,930],[620,950],[790,40],[400,40]].map(([x, y]) => `<path d="M${x},${y} q12,-10 24,0 t24,0"/>`).join("")}</g>
+      <path id="trailBase" d="${catmull(P)}" fill="none" stroke="rgba(240,228,196,.55)" stroke-width="5" stroke-linecap="round" stroke-dasharray="1 15"/>
+      <path id="trailDone" d="${catmull(P)}" fill="none" stroke="#E3B65B" stroke-width="7" stroke-linecap="round"/>
+      <g transform="translate(${P[0].x.toFixed(1)},${P[0].y.toFixed(1)})"><circle r="16" fill="#0C232C" stroke="rgba(237,229,208,.55)" stroke-width="3"/></g>
+      ${lab(P[0], "Liman", "small")}
+      <g transform="translate(${T.x.toFixed(1)},${T.y.toFixed(1)})">
+        ${tNext ? '<circle class="pulse" r="44"/>' : ""}
+        <circle r="44" fill="rgba(227,182,91,.12)"/>
+        <path d="M-26,-26 L26,26 M26,-26 L-26,26" stroke="${tNext ? "#E3B65B" : "#C9A15A"}" stroke-width="12" stroke-linecap="round"/>
+      </g>
+      <text class="maplabel ${tNext ? "" : "small"}" x="${T.x.toFixed(1)}" y="${(T.y + 82).toFixed(1)}" text-anchor="middle">Hazine</text>
+      ${marks}
+      ${label}
+      <g id="ship"><g class="bob"><circle r="22" fill="#F0E3C3" stroke="#2B1F11" stroke-width="3"/>
+        <path d="M-12,4 L12,4 L8,11 L-8,11 Z M0,-14 L0,4 M0,-13 L10,0 L0,0" fill="#2B1F11" stroke="#2B1F11" stroke-width="2.4" stroke-linejoin="round"/></g></g>
+    </svg></div>`;
+}
+
+
+// Bölge adını, gerçek genişliğini ölçerek işaretlerle çakışmayan tarafa yerleştir
+function placeLabel(root) {
+  const el = $("#regLabel", root); if (!el) return;
+  const P = nodes(), idx = +el.dataset.idx, p = P[idx];
+  const obs = P.map((q, i) => ({ x: q.x, y: q.y, r: i === 9 ? 56 : i === 0 ? 24 : 38 })).filter((_, i) => i !== idx);
+  obs.push({ x: P[9].x, y: P[9].y + 70, r: 46 });
+  const cands = [["middle", p.x, p.y - 50], ["middle", p.x, p.y + 78], ["middle", p.x, p.y - 92], ["middle", p.x, p.y + 120]];
+  [13, -30, 60, -70, 100, -110, 140].forEach(dy => { cands.push(["start", p.x + 44, p.y + dy]); cands.push(["end", p.x - 44, p.y + dy]); });
+  let best = cands[0], bestS = Infinity;
+  cands.forEach(c => {
+    el.setAttribute("text-anchor", c[0]); el.setAttribute("x", c[1].toFixed(1)); el.setAttribute("y", c[2].toFixed(1));
+    const b = el.getBBox(); let s = Math.abs(c[2] - p.y - 13) / 40 + (c[0] === "middle" ? .6 : 0);
+    if (b.x < 8 || b.x + b.width > 992 || b.y < 28 || b.y + b.height > 992) s += 5000;
+    obs.forEach(o => { const dx = Math.max(b.x - o.x, 0, o.x - b.x - b.width), dy = Math.max(b.y - o.y, 0, o.y - b.y - b.height); if (dx * dx + dy * dy < o.r * o.r) s += 1000; });
+    if (s < bestS) { bestS = s; best = c; }
+  });
+  el.setAttribute("text-anchor", best[0]); el.setAttribute("x", best[1].toFixed(1)); el.setAttribute("y", best[2].toFixed(1));
+}
+
+function setupChart(root) {
+  placeLabel(root);
+  const cv = $("canvas", root); drawSea(cv);
+  const base = $("#trailBase", root), doneP = $("#trailDone", root), ship = $("#ship", root);
+  const P = nodes(), total = base.getTotalLength();
+  // her düğüme kadar olan uzunluk
+  const tmp = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  $("svg", root).appendChild(tmp);
+  const cum = P.map((_, i) => { if (!i) return 0; tmp.setAttribute("d", catmull(P.slice(0, i + 1))); return tmp.getTotalLength(); });
+  tmp.remove();
+  doneP.style.strokeDasharray = `${total} ${total}`;
+  const place = len => { doneP.style.strokeDashoffset = total - len; const pt = base.getPointAtLength(len); ship.setAttribute("transform", `translate(${pt.x.toFixed(1)},${pt.y.toFixed(1)})`); };
+  const to = cum[state.done];
+  if (state.animFrom != null && state.animFrom < state.done && !REDUCED) {
+    const from = cum[state.animFrom], dur = 1500, s0 = performance.now();
+    state.animFrom = null;
+    const step = now => { const k = Math.min(1, (now - s0) / dur), e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2; place(from + (to - from) * e); if (k < 1) requestAnimationFrame(step); };
+    place(from); requestAnimationFrame(step);
+  } else { state.animFrom = null; place(to); }
+}
+
+/* ---------- durum çubuğu ---------- */
+function renderHud() {
+  const hud = $("#hud");
+  if (state.view === "intro" || state.view === "character" || state.view === "board") { hud.hidden = true; return; }
+  hud.hidden = false;
+  const pouch = WORD.map((_, i) => `<span class="${i < state.done ? "got" : ""}">${i < state.done ? esc(state.letters[i]) : ""}</span>`).join("");
+  hud.innerHTML = `<span class="cap"><span class="face">${avatarSVG(state.char)}</span>Kaptan ${esc(state.name)}</span>
+    <button class="snd" id="sndBtn" aria-label="Ses ${SND.on ? "açık, kapatmak için dokun" : "kapalı, açmak için dokun"}">${SND.on
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16 8.5a5 5 0 010 7M18.5 6a8.5 8.5 0 010 12"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M17 9l5 6M22 9l-5 6"/></svg>'}</button>
+    ${state.streak >= 2 ? `<span class="streak" title="Art arda ilk denemede doğru">Seri ×${state.streak}</span>` : ""}
+    <span class="stat">Puan <b>${state.score}</b></span>
+    <span class="stat" title="Pusula hakkı">${COMPASS_SVG}<b>${state.compass}</b></span>
+    <span class="pouch" aria-label="Toplanan harfler: ${state.done} / 8">${pouch}</span>`;
+  $("#sndBtn", hud).addEventListener("click", () => { SND.on = !SND.on; try { localStorage.setItem("kh-sound", SND.on ? "on" : "off"); } catch (e) {} renderHud(); snd("click"); });
+}
+
+/* ---------- görünümler ---------- */
+const views = {
+  intro() {
+    const total = REGIONS.reduce((s, r) => s + r.concepts.length, 0);
+    return `<div class="stage fade">
+      ${chartHTML()}
+      <section class="panel">
+        <div class="eyebrow">Yazılım Geliştirme Departmanı · Kod Adası</div>
+        <h1 class="title">Kavram Hazinesi</h1>
+        <p class="lead">Kaptan Null hazinesini Kod Adası'nın tam ortasına gömdü. Oraya giden yol 8 bölgeden geçiyor ve her yol ayrımında bir kavram saklı. İpucunu çöz, doğru tabelayı seç, her bölgeden bir harf topla. Harfler sandığın şifresi.</p>
+        <form id="startForm" class="card panel" novalidate>
+          <div class="field"><label for="name">Kaptan adın <span class="muted" style="font-weight:500">(grupta tanındığın adla yaz)</span></label>
+            <input id="name" name="name" autocomplete="given-name" maxlength="24" placeholder="Adını yaz" value="${esc(state.name)}"></div>
+          <fieldset class="modes"><legend>Rota</legend>
+            <label class="mode" for="m-short"><input type="radio" id="m-short" name="mode" value="short" ${state.mode !== "long" ? "checked" : ""}>
+              <span><b>Kısa rota</b><span>Her bölgede 2 yol ayrımı, toplam 16 kavram. Yaklaşık 5 dakika.</span></span></label>
+            <label class="mode" for="m-long"><input type="radio" id="m-long" name="mode" value="long" ${state.mode === "long" ? "checked" : ""}>
+              <span><b>Büyük keşif</b><span>Etkinlikteki ${total} kavramın hepsi. Yaklaşık 12 dakika.</span></span></label>
+          </fieldset>
+          <ol class="rules">
+            <li>Her yol ayrımında bir kavram kendini anlatıyor ve 4 tabeladan biri onu gösteriyor.</li>
+            <li>Fitil 30 saniyede yanıp biter. Süre dolarsa fırtına çıkar ve o yoldan puan alamazsın.</li>
+            <li>Hızlı cevap ekstra puan getirir. Art arda 3 doğruda puanın 1,5 katına, 5 doğruda 2 katına çıkar.</li>
+            <li>Yanlış tabela çıkmaza çıkar. Pusula bir yanlış yolu kapatır ama hakkın çok az.</li>
+            <li>Karakterinin sınıfı sana bir avantaj verir. Rozetleri topla.</li>
+            <li>Her bölgeden bir harf topla, sonunda harfleri dizip sandığı aç.</li>
+          </ol>
+          <p class="err" id="err" aria-live="polite"></p>
+          <div class="row"><button class="btn" type="submit">Karakterini oluştur</button><button class="btn ghost" type="button" id="toBoard">Skor tablosu</button></div>
+        </form>
+
+      </section></div>`;
+  },
+
+  map() {
+    const next = state.done + 1;
+    const nextReg = next <= 8 ? REGIONS[next - 1] : null;
+    const per = state.plan[0]?.length || 2;
+    const list = REGIONS.map((r, i) => {
+      const n = i + 1, cls = n <= state.done ? "done" : n === next ? "next" : "";
+      const chip = n <= state.done ? `<span class="chip gold">Harf: ${esc(state.letters[i])}</span>` : n === next ? `<span class="chip gold">Sıradaki</span>` : "";
+      return `<li class="${cls}"><span class="num">${n}</span><span>${esc(r.name)}<span class="cat">${esc(r.cat)}</span></span>${chip}</li>`;
+    }).join("");
+    const head = nextReg
+      ? `<div class="eyebrow">Sıradaki durak · ${per} yol ayrımı</div><h2 class="h2">${esc(nextReg.name)}</h2><p class="muted" style="margin:0">${esc(nextReg.cat)} bölgesi. İpuçlarını dikkatle oku.</p>
+         <div class="row"><button class="btn" id="go">Bölgeye gir</button></div>`
+      : `<div class="eyebrow">Son durak</div><h2 class="h2">Hazine</h2><p class="muted" style="margin:0">8 harfin hepsi kesende. Sandığın kilidini açmaya hazırsın.</p>
+         <div class="row"><button class="btn" id="go">Sandığa git</button></div>`;
+    return `<div class="stage fade">${chartHTML()}<section class="panel"><div class="card panel">${head}</div><ul class="regions">${list}</ul></section></div>`;
+  },
+
+  question() {
+    const reg = REGIONS[state.region], q = state.q, per = state.plan[state.region].length;
+    const cpt = C(state.region, q.c);
+    const steps = Array.from({ length: per }, (_, i) => `<i class="${i < state.qi || (i === state.qi && q.solved) ? "on" : ""}"></i>`).join("");
+    const signs = q.opts.map((ci, k) => {
+      const dead = q.wrong.includes(ci), closed = q.closed.includes(ci), right = q.solved && ci === q.c;
+      const cls = ["sign", k % 2 ? "left" : "", dead ? "dead" : "", closed ? "closed" : "", right ? "right" : "", q.hit === ci ? "hit" : "", right && q.win ? "win" : ""].join(" ");
+      const tag = dead ? "Çıkmaz yol" : closed ? "Pusula kapattı" : right ? (q.timedOut ? "Doğru yol buydu" : "Doğru yol") : `${k + 1}. yol`;
+      const dis = dead || closed || q.solved;
+      return `<button class="${cls}" style="--i:${k}" data-c="${ci}" ${dis ? "disabled" : ""}><small>${tag}</small><span class="nm">${esc(C(state.region, ci).n)}</span></button>`;
+    }).join("");
+    let note = "";
+    if (q.solved) {
+      const last = state.qi === per - 1;
+      const bonus = q.timedOut ? "" : [q.speed ? `hız bonusu +${q.speed}` : "", q.mult > 1 ? `seri ×${q.mult}` : ""].filter(Boolean).join(" · ");
+      note = q.timedOut
+        ? `<div class="note bad fade" role="status"><h3>Fitil bitti, fırtına çıktı!</h3>
+        <p>Bu yol ayrımından puan alamadın. Doğru tabela <span class="term">${esc(cpt.n)}</span> idi: ${esc(cpt.expl)}</p>
+        <div class="row" style="margin-top:8px"><button class="btn" id="next">${last ? "Bölgeyi tamamla" : "İlerle"}</button></div></div>`
+        : `<div class="note good fade" role="status"><h3>Doğru yol! +${q.gained} puan${bonus ? ` <span class="muted" style="font-weight:600;font-size:15px">(${bonus})</span>` : ""}</h3>
+        <p><span class="term">${esc(cpt.n)}:</span> ${esc(cpt.expl)}</p>
+        <div class="row" style="margin-top:8px"><button class="btn" id="next">${last ? "Bölgeyi tamamla" : "İlerle"}</button></div></div>`;
+    } else if (q.wrong.length) {
+      const w = C(state.region, q.wrong[q.wrong.length - 1]);
+      note = `<div class="note bad fade" role="status"><h3>Çıkmaz yol!</h3>
+        <p>Bu tabelada <span class="term">${esc(w.n)}</span> yazıyordu: ${esc(w.expl)}</p>
+        <p class="muted">Başka bir yol dene.</p></div>`;
+    }
+    const canCompass = !q.solved && !q.usedCompass && state.compass > 0 && q.opts.some(ci => ci !== q.c && !q.wrong.includes(ci) && !q.closed.includes(ci));
+    const left = Math.max(0, q.deadline - Date.now());
+    const timer = `<div class="timer ${q.solved ? "off" : ""} ${!q.solved && left < 10000 ? "low" : ""}" id="timer"><span class="lbl">Fitil</span>
+      <div class="fuse" id="fuse" style="--k:${q.solved ? 0 : (left / timeFor()).toFixed(3)}"><i></i></div><span class="sec" id="sec">${q.solved ? "–" : Math.ceil(left / 1000)}</span></div>`;
+    return `<section class="cross fade ${q.fresh ? "enter" : ""}">
+      <div class="crosshead"><div><div class="eyebrow">${esc(reg.cat)}</div><h2 class="h2">${esc(reg.name)}</h2></div>
+        <div><div class="eyebrow" style="text-align:right">Yol ayrımı ${state.qi + 1} / ${per}</div><div class="steps">${steps}</div></div></div>
+      ${timer}
+      <div class="scroll"><div class="eyebrow">İpucu</div><p>${esc(cpt.clue)}</p></div>
+      <p class="ask">Hangi tabela bu kavramı gösteriyor?</p>
+      <div class="post">${signs}</div>
+      <div class="tools"><button class="compass-btn" id="compass" ${canCompass ? "" : "disabled"}>${COMPASS_SVG} Pusulayı kullan · ${state.compass} hak</button></div>
+      <div aria-live="polite">${note}</div>
+    </section>`;
+  },
+
+  board() {
+    return `<section class="result fade">
+      <div class="row" style="justify-content:space-between"><div><div class="eyebrow">Kod Adası</div><h1 class="h2" style="font-size:48px">Skor tablosu</h1></div>
+      <button class="btn ghost" id="back">Geri dön</button></div>
+      <div class="lbwrap card" id="lb"></div>
+    </section>`;
+  },
+
+  character() {
+    const ch = state.char, cl = clsOf(ch.cls);
+    const group = (title, key, items, swatch) => `<fieldset class="opt"><legend>${title}</legend><div class="chips">${items.map(([val, label], i) => {
+      const v = typeof val === "number" ? val : val; const on = ch[key] === v;
+      return `<button type="button" data-k="${key}" data-v="${esc(v)}" aria-pressed="${on}">${swatch ? `<span class="sw" style="background:${swatch(i)}"></span>` : ""}${esc(label)}</button>`;
+    }).join("")}</div></fieldset>`;
+    return `<div class="charstage fade">
+      <aside class="preview">
+        <div class="eyebrow">Karakter kartı</div>
+        <div class="portrait">${avatarSVG(ch)}</div>
+        <div class="pname">Kaptan ${esc(state.name)}</div>
+        <span class="clsbadge">${esc(cl.name)} · ${esc(cl.perk)}</span>
+        <div class="row" style="justify-content:center"><button class="btn ghost" id="rand" type="button">Rastgele</button><button class="btn" id="startGame" type="button">Maceraya başla</button></div>
+      </aside>
+      <section class="opts">
+        <div><div class="eyebrow">Adım 2 / 2</div><h2 class="h2">Karakterini oluştur</h2></div>
+        <fieldset class="opt"><legend>Sınıf</legend><div class="classes">${CLASSES.map(c => `<button type="button" data-k="cls" data-v="${c.id}" aria-pressed="${ch.cls === c.id}"><b>${esc(c.name)}</b><span class="perk">${esc(c.perk)}</span><span>${esc(c.desc)}</span></button>`).join("")}</div></fieldset>
+        ${group("Ten rengi", "skin", SKINS.map((c, i) => [i, ["Açık", "Buğday", "Esmer", "Kahve", "Koyu"][i]]), i => SKINS[i])}
+        ${group("Başlık", "hat", HATS)}
+        ${group("Yüz", "face", FACES)}
+        ${group("Sakal", "beard", BEARDS)}
+        ${group("Kıyafet", "outfit", OUTFITS.map((o, i) => [i, o[0]]), i => OUTFITS[i][1])}
+        ${group("Yoldaş", "pet", PETS)}
+      </section></div>`;
+  },
+
+  letter() {
+    const reg = REGIONS[state.region];
+    const items = state.log.filter(l => l.r === state.region);
+    const first = items.filter(l => l.first).length;
+    return `<section class="center fade">
+      <div class="eyebrow">${esc(reg.name)} tamamlandı</div>
+      <div class="bigtile" aria-label="Kazandığın harf ${esc(state.letters[state.region])}">${esc(state.letters[state.region])}</div>
+      <h2 class="h2">Bir harf daha kesende</h2>
+      <p class="lead">${items.length} yol ayrımının ${first} tanesinde doğru tabelayı ilk denemede buldun. Harfler sandığın şifresini oluşturuyor, sırasını sonunda sen bulacaksın.</p>
+      <div class="row"><button class="btn" id="back">Haritaya dön</button></div>
+    </section>`;
+  },
+
+  lock() {
+    const slots = WORD.map((_, i) => `<span class="${i < state.lock.length ? "f" : ""}">${i < state.lock.length ? esc(state.lockTiles[state.lock[i]]) : ""}</span>`).join("");
+    const tiles = state.lockTiles.map((L, i) => `<button data-i="${i}" ${state.lock.includes(i) ? "disabled" : ""} aria-label="${esc(L)} harfi">${esc(L)}</button>`).join("");
+    return `<section class="center fade">
+      <div class="eyebrow">Son durak · Hazine</div>
+      ${chestSVG(false)}
+      <h2 class="h2">Sandığın kilidi</h2>
+      <p class="lead">Topladığın 8 harf, şifre olan kavramı oluşturuyor. ${state.lockFails ? "<b style=\"color:var(--brass)\">İpucu açıldı:</b> programın hafızasında bir değer saklayan, adı olan kutu." : "Bir kez yanlış dizersen sandık sana bir ipucu verir."}</p>
+      <div class="slots" id="slots">${slots}</div>
+      <div class="tiles">${tiles}</div>
+      <p class="err" aria-live="polite">${esc(state.lockMsg)}</p>
+      <div class="row"><button class="btn ghost" id="undo" ${state.lock.length ? "" : "disabled"}>Son harfi geri al</button><button class="btn ghost" id="clear" ${state.lock.length ? "" : "disabled"}>Baştan diz</button></div>
+    </section>`;
+  },
+
+  result() {
+    const pct = state.maxScore ? state.score / state.maxScore : 0;
+    const rank = rankOf(pct);
+    finalizeAch();
+    const cl = clsOf(state.char.cls);
+    const firsts = state.log.filter(l => l.first).length;
+    const time = fmtTime(state.t1 - state.t0);
+    const groups = REGIONS.map((reg, r) => {
+      const items = state.log.filter(l => l.r === r);
+      if (!items.length) return "";
+      const ok = items.filter(l => l.first).length;
+      return `<details class="log"><summary><span>${esc(reg.name)} <span class="muted" style="font-weight:500">· ${esc(reg.cat)}</span></span><span class="chip ${ok === items.length ? "gold" : ""}">${ok}/${items.length}</span></summary><ul>${items.map(l => {
+        const cp = C(r, l.c);
+        return `<li><span class="term ${l.first ? "ok" : "miss"}">${l.first ? "✓" : "✗"} ${esc(cp.n)}</span><span>${esc(cp.expl)}</span></li>`;
+      }).join("")}</ul></details>`;
+    }).join("");
+    return `<section class="result fade">
+      <div class="center">${chestSVG(true)}</div>
+      <div class="ticket">
+        <div class="eyebrow">Kavram Hazinesi · ${state.mode === "long" ? "Büyük keşif" : "Kısa rota"}</div>
+        <div class="hero-row"><div class="portrait">${avatarSVG(state.char)}</div>
+          <div><h1 class="title" style="font-size:clamp(36px,7vw,58px)">Hazine senin, Kaptan ${esc(state.name)}!</h1>
+          <div class="row" style="margin-top:8px"><span class="rank">${rank}</span><span class="clsbadge">${esc(cl.name)}</span></div></div></div>
+        <div class="stats">
+          <div><b>${state.score}</b><span>puan</span></div>
+          <div><b>${firsts}/${state.log.length}</b><span>ilk denemede doğru</span></div>
+          <div><b>${state.bestStreak}</b><span>en uzun seri</span></div>
+          <div><b>${time}</b><span>süre</span></div>
+        </div>
+        <p class="muted" style="margin:0">Skorun tabloya kendiliğinden kaydedilir. İstersen sonucu kopyalayıp gruba da gönderebilirsin.</p>
+        <div class="row"><button class="btn" id="copy">Sonucu kopyala</button><button class="btn ghost" id="again">Yeniden oyna</button></div>
+        <div id="copyOut" aria-live="polite"></div>
+      </div>
+      <h2 class="h2" style="font-size:32px">Skor tablosu</h2>
+      <div class="lbwrap card" id="lb"></div>
+      <h2 class="h2" style="font-size:32px">Rozetler · ${state.ach.length} / ${ACH.length}</h2>
+      <div class="badges">${ACH.map(a => `<div class="badge ${state.ach.includes(a.id) ? "on" : ""}">${BADGE_SVG}<div><b>${esc(a.name)}</b><span>${esc(a.desc)}</span></div></div>`).join("")}</div>
+      <h2 class="h2" style="font-size:32px">Yolculukta karşılaştığın kavramlar</h2>
+      ${groups}
+    </section>`;
+  }
+};
+
+function chestSVG(open) {
+  return `<svg class="chest ${open ? "open" : ""}" id="chest" viewBox="0 0 240 190" aria-hidden="true">
+    <defs><radialGradient id="cg"><stop offset="0" stop-color="#FFE3A0" stop-opacity=".75"/><stop offset=".5" stop-color="#E3B65B" stop-opacity=".25"/><stop offset="1" stop-color="#E3B65B" stop-opacity="0"/></radialGradient></defs>
+    <ellipse class="glow" cx="120" cy="88" rx="118" ry="70" fill="url(#cg)"/>
+    <circle class="coin" cx="96" cy="92" r="9" fill="#F6D88F" stroke="#9C7631" stroke-width="2"/>
+    <circle class="coin" cx="124" cy="86" r="9" fill="#F6D88F" stroke="#9C7631" stroke-width="2"/>
+    <circle class="coin" cx="148" cy="94" r="9" fill="#F6D88F" stroke="#9C7631" stroke-width="2"/>
+    <circle class="coin" cx="112" cy="96" r="7" fill="#F6D88F" stroke="#9C7631" stroke-width="2"/>
+    <rect x="40" y="96" width="160" height="80" rx="6" fill="#6E4524" stroke="#3A230F" stroke-width="3"/>
+    <path d="M40,122 H200 M40,150 H200" stroke="#5A381C" stroke-width="2"/>
+    <rect x="58" y="96" width="14" height="80" fill="#C9A15A" stroke="#7A5A2E" stroke-width="2"/>
+    <rect x="168" y="96" width="14" height="80" fill="#C9A15A" stroke="#7A5A2E" stroke-width="2"/>
+    <rect x="106" y="104" width="28" height="34" rx="4" fill="#E3B65B" stroke="#7A5A2E" stroke-width="2"/>
+    <circle cx="120" cy="117" r="4" fill="#3A230F"/><rect x="118" y="118" width="4" height="10" fill="#3A230F"/>
+    <g class="lid">
+      <path d="M40,96 V74 Q120,30 200,74 V96 Z" fill="#7B4F2B" stroke="#3A230F" stroke-width="3"/>
+      <path d="M58,96 V64 Q65,58 72,56 V96 Z M168,96 V56 Q175,58 182,64 V96 Z" fill="#C9A15A" stroke="#7A5A2E" stroke-width="2"/>
+    </g>
+  </svg>`;
+}
+
+/* ---------- efektler ---------- */
+const FX = { cv: null, ctx: null, parts: [], raf: 0 };
+function fxCanvas() {
+  if (!FX.cv) { FX.cv = document.createElement("canvas"); FX.cv.id = "fx"; FX.cv.setAttribute("aria-hidden", "true"); document.body.appendChild(FX.cv); FX.ctx = FX.cv.getContext("2d"); }
+  const d = Math.min(2, window.devicePixelRatio || 1), w = window.innerWidth, h = window.innerHeight;
+  if (FX.cv.width !== w * d || FX.cv.height !== h * d) { FX.cv.width = w * d; FX.cv.height = h * d; }
+  FX.ctx.setTransform(d, 0, 0, d, 0, 0);
+}
+const PAL = { coin: ["#F6D88F", "#E3B65B", "#FFE9B0"], spark: ["#FFF6D8", "#FFD27A", "#E3B65B"], dust: ["#8C7A62", "#6E5A44", "#B49A78"], confetti: ["#E3B65B", "#E07A5F", "#7FC8C8", "#EDE5D0", "#B7A3E8"] };
+function burstFrom(x, y, kind, n) {
+  if (REDUCED) return; fxCanvas();
+  for (let i = 0; i < n; i++) {
+    const a = kind === "confetti" && y < 0 ? Math.PI / 2 + (Math.random() - .5) * 1.2 : Math.random() * Math.PI * 2;
+    const sp = kind === "dust" ? 1 + Math.random() * 2.5 : kind === "spark" ? 2 + Math.random() * 5 : 3 + Math.random() * 7;
+    FX.parts.push({ kind, x: x + (kind === "confetti" && y < 0 ? (Math.random() - .5) * window.innerWidth : 0), y,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - (kind === "coin" ? 5 : kind === "confetti" && y >= 0 ? 4 : 0),
+      g: kind === "spark" ? .05 : kind === "dust" ? .03 : kind === "confetti" ? .12 : .32,
+      life: 0, max: kind === "spark" ? 40 + Math.random() * 20 : 70 + Math.random() * 50,
+      size: kind === "coin" ? 6 + Math.random() * 4 : kind === "confetti" ? 5 + Math.random() * 5 : 2 + Math.random() * 3,
+      rot: Math.random() * 6, vr: (Math.random() - .5) * .4, col: PAL[kind][Math.floor(Math.random() * PAL[kind].length)] });
+  }
+  if (!FX.raf) FX.raf = requestAnimationFrame(fxLoop);
+}
+function burstAt(el, kind, n) { if (!el) return; const r = el.getBoundingClientRect(); burstFrom(r.left + r.width / 2, r.top + r.height / 2, kind, n); }
+function fxLoop() {
+  fxCanvas(); const c = FX.ctx; c.clearRect(0, 0, window.innerWidth, window.innerHeight);
+  FX.parts = FX.parts.filter(p => p.life < p.max);
+  FX.parts.forEach(p => {
+    p.life++; p.vy += p.g; p.vx *= p.kind === "confetti" ? .985 : .99; p.x += p.vx; p.y += p.vy; p.rot += p.vr;
+    const a = Math.max(0, 1 - p.life / p.max); c.globalAlpha = p.kind === "coin" ? Math.min(1, a * 2) : a; c.fillStyle = p.col;
+    c.save(); c.translate(p.x, p.y); c.rotate(p.rot);
+    if (p.kind === "coin") { c.scale(Math.abs(Math.cos(p.rot * 2)) + .15, 1); c.beginPath(); c.arc(0, 0, p.size, 0, 7); c.fill(); c.strokeStyle = "#9C7631"; c.lineWidth = 1.5; c.stroke(); }
+    else if (p.kind === "confetti") { c.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2); }
+    else { c.beginPath(); c.arc(0, 0, p.size, 0, 7); c.fill(); }
+    c.restore();
+  });
+  c.globalAlpha = 1;
+  FX.raf = FX.parts.length ? requestAnimationFrame(fxLoop) : 0;
+  if (!FX.raf) c.clearRect(0, 0, window.innerWidth, window.innerHeight);
+}
+function floatAt(el, text, cls = "") {
+  if (!el) return; const r = el.getBoundingClientRect(), d = document.createElement("div");
+  d.className = "float " + cls; d.textContent = text; d.style.left = (r.left + r.width / 2) + "px"; d.style.top = (r.top + r.height / 2) + "px";
+  document.body.appendChild(d); setTimeout(() => d.remove(), 1300);
+}
+function quake() { if (REDUCED) return; const v = $("#view"); v.classList.remove("quake"); void v.offsetWidth; v.classList.add("quake"); setTimeout(() => v.classList.remove("quake"), 500); }
+function rankOf(pct) { return pct >= .8 ? "Efsane Kaptan" : pct >= .6 ? "Usta Kâşif" : pct >= .4 ? "Cesur Tayfa" : "Çaylak Denizci"; }
+
+function finalizeAch() {
+  const all = state.log.length && state.log.every(l => l.first);
+  [[all, "perfect"], [state.bestStreak >= 8, "streak8"], [state.compassUsed === 0, "nocompass"], [!state.lockFails, "codebreaker"], [state.stormed, "storm"]]
+    .forEach(([ok, id]) => { if (ok && !state.ach.includes(id)) state.ach.push(id); });
+}
+function resultRecord() {
+  return { name: state.name, cls: state.char.cls, mode: state.mode, score: state.score, firsts: state.log.filter(l => l.first).length, total: state.log.length,
+    best: state.bestStreak, secs: Math.round((state.t1 - state.t0) / 1000), day: dayStamp(), ach: state.ach };
+}
+
+/* ---------- fitil (zamanlayıcı) ---------- */
+let timerRAF = 0, lastTick = 0;
+function runTimer() {
+  cancelAnimationFrame(timerRAF);
+  const tick = () => {
+    const q = state.q;
+    if (state.view !== "question" || !q || q.solved) { timerRAF = 0; return; }
+    const left = q.deadline - Date.now();
+    const f = $("#fuse"), sec = $("#sec"), tm = $("#timer");
+    if (f) f.style.setProperty("--k", Math.max(0, left / timeFor()).toFixed(4));
+    const secN = Math.ceil(left / 1000);
+    if (secN <= 5 && secN > 0 && secN !== lastTick) { lastTick = secN; snd("tick"); }
+    if (sec) sec.textContent = Math.max(0, Math.ceil(left / 1000));
+    if (tm) tm.classList.toggle("low", left < 10000);
+    if (left <= 0) { timeOut(); return; }
+    timerRAF = requestAnimationFrame(tick);
+  };
+  timerRAF = requestAnimationFrame(tick);
+}
+function timeOut() {
+  const q = state.q; if (!q || q.solved) return;
+  q.solved = true; q.timedOut = true; q.gained = 0; state.streak = 0; snd("storm"); state.stormed = true;
+  state.log.push({ r: state.region, c: q.c, first: false });
+  render(); quake();
+  const v = $("#view"); burstAt($(".scroll", v), "dust", 30);
+  floatAt($(".scroll", v), "Fırtına!", "bad");
+  const n = $(".note", v); n && n.scrollIntoView({ behavior: REDUCED ? "auto" : "smooth", block: "nearest" });
+}
+
+/* ---------- etkileşimler ---------- */
+let lastView = null;
+function render() {
+  renderHud();
+  const v = $("#view");
+  v.innerHTML = views[state.view]();
+  // Aynı ekran yeniden çizildiğinde giriş animasyonunu tekrar oynatma
+  if (lastView === state.view && v.firstElementChild) v.firstElementChild.classList.remove("fade");
+  lastView = state.view;
+  const chart = $(".chart", v);
+  if (chart) setupChart(v);
+  bind[state.view] && bind[state.view](v);
+}
+
+const bind = {
+  intro(v) {
+    $("#toBoard", v).addEventListener("click", () => { state.name = $("#name", v).value.trim(); state.view = "board"; render(); window.scrollTo(0, 0); });
+    $("#startForm", v).addEventListener("submit", e => {
+      e.preventDefault();
+      const name = $("#name", v).value.trim();
+      const mode = $("input[name=mode]:checked", v).value;
+      if (!name) { $("#err", v).textContent = "Başlamak için adını yaz. Sonuç kartında bu ad görünecek."; $("#name", v).focus(); return; }
+      state.name = name; state.mode = mode; state.view = "character"; snd("click"); render(); window.scrollTo(0, 0);
+    });
+  },
+  map(v) {
+    $("#go", v).addEventListener("click", () => {
+      if (state.done >= 8) { state.view = "lock"; state.lock = []; state.lockMsg = "";
+        let t; do { t = shuffle(state.letters); } while (t.join("") === WORD_STR); state.lockTiles = t; }
+      else { state.region = state.done; state.qi = 0; state.bugUsed = false; startQuestion(); }
+      snd("click");
+      render(); window.scrollTo(0, 0);
+    });
+  },
+  question(v) {
+    const q = state.q;
+    const sec = $(".cross", v);
+    if (q.fresh) { q.fresh = false; }
+    q.hit = null; q.win = false;
+    v.querySelectorAll(".sign").forEach(b => b.addEventListener("click", () => {
+      const ci = +b.dataset.c;
+      if (q.solved || q.wrong.includes(ci) || q.closed.includes(ci)) return;
+      if (ci === q.c) {
+        q.solved = true;
+        const first = !q.wrong.length && !q.usedCompass;
+        const base = Math.max(10, 100 - 50 * q.wrong.length - (q.usedCompass ? 40 : 0));
+        if (first && Date.now() - q.started < 4000) setTimeout(() => award("flash"), 600);
+        if (first) {
+          state.streak++; state.bestStreak = Math.max(state.bestStreak, state.streak);
+          q.speed = Math.round(50 * Math.max(0, q.deadline - Date.now()) / TIME);
+          q.mult = state.streak >= 5 ? 2 : state.streak >= 3 ? 1.5 : 1;
+        } else { if (!(state.char.cls === "bug" && q.wrong.length === 1 && !q.usedCompass && q.shielded)) state.streak = 0; q.speed = 0; q.mult = 1; }
+        q.gained = Math.round((base + q.speed + (state.char.cls === "hazine" ? 15 : 0)) * q.mult);
+        snd("right"); setTimeout(() => snd("coin"), 260);
+        state.score += q.gained; q.win = true;
+        state.log.push({ r: state.region, c: q.c, first });
+        render();
+        const el = $(".sign.right", v);
+        burstAt(el, "coin", 26); burstAt(el, "spark", 18);
+        floatAt(el, "+" + q.gained);
+        if (q.mult > 1) setTimeout(() => floatAt($("#hud .streak") || el, "Seri ×" + state.streak, "streak"), 350);
+      } else {
+        q.wrong.push(ci); q.hit = ci; snd("wrong");
+        if (state.char.cls === "bug" && !state.bugUsed) { state.bugUsed = true; q.shield = true; q.shielded = true; } else state.streak = 0;
+        render();
+        const el = $(`.sign[data-c='${ci}']`, v);
+        floatAt(el, q.shield ? "Bug Avcısı: seri korundu" : "Çıkmaz!", "bad"); q.shield = false; burstAt(el, "dust", 16);
+        quake();
+      }
+      const n = $(".note", v); n && n.scrollIntoView({ behavior: REDUCED ? "auto" : "smooth", block: "nearest" });
+      $("#next", v)?.focus({ preventScroll: true });
+    }));
+    $("#compass", v).addEventListener("click", () => {
+      const open = q.opts.filter(ci => ci !== q.c && !q.wrong.includes(ci) && !q.closed.includes(ci));
+      if (!open.length || state.compass <= 0 || q.usedCompass) return;
+      const shut = shuffle(open)[0];
+      q.closed.push(shut); q.usedCompass = true; state.compass--; state.compassUsed++;
+      render();
+      burstAt($(`.sign[data-c='${shut}']`, v), "dust", 12);
+    });
+    $("#next", v)?.addEventListener("click", () => {
+      if (state.qi < state.plan[state.region].length - 1) { state.qi++; startQuestion(); }
+      else { state.view = "letter"; }
+      render(); window.scrollTo(0, 0);
+    });
+    if (!q.solved) runTimer();
+  },
+  board(v) {
+    $("#back", v).addEventListener("click", () => { state.view = "intro"; render(); window.scrollTo(0, 0); });
+    mountLB();
+  },
+  character(v) {
+    v.querySelectorAll("[data-k]").forEach(b => b.addEventListener("click", () => {
+      const k = b.dataset.k, raw = b.dataset.v;
+      state.char[k] = k === "skin" || k === "outfit" ? +raw : raw;
+      snd("click"); render();
+      const port = $(".portrait", v); port && burstAt(port, "spark", 10);
+    }));
+    $("#rand", v).addEventListener("click", () => {
+      const pick = a => a[Math.floor(Math.random() * a.length)];
+      Object.assign(state.char, { skin: Math.floor(Math.random() * SKINS.length), hat: pick(HATS)[0], face: pick(FACES)[0], beard: pick(BEARDS)[0],
+        outfit: Math.floor(Math.random() * OUTFITS.length), pet: pick(PETS)[0], cls: pick(CLASSES).id });
+      snd("coin"); render(); burstAt($(".portrait", v), "confetti", 30);
+    });
+    $("#startGame", v).addEventListener("click", () => { newGame(state.name, state.mode, { ...state.char }); snd("open"); render(); window.scrollTo(0, 0); });
+  },
+  letter(v) {
+    snd("coin");
+    if (state.log.filter(l => l.r === state.region).every(l => l.first)) setTimeout(() => award("region"), 700);
+    setTimeout(() => { const t = $(".bigtile", v); burstAt(t, "spark", 40); burstAt(t, "coin", 14); }, 500);
+    $("#back", v).addEventListener("click", () => {
+      state.animFrom = state.done; state.done++; state.view = "map"; render(); window.scrollTo(0, 0);
+    });
+  },
+  lock(v) {
+    v.querySelectorAll(".tiles button").forEach(b => b.addEventListener("click", () => {
+      const i = +b.dataset.i; if (state.lock.includes(i) || state.lock.length >= 8) return;
+      state.lock.push(i); state.lockMsg = ""; snd("click");
+      if (state.lock.length === 8) {
+        const word = state.lock.map(k => state.lockTiles[k]).join("");
+        if (word === WORD_STR) { state.t1 = Date.now(); snd("open");
+          if (!state.lockFails) state.ach.includes("codebreaker") || state.ach.push("codebreaker");
+          render(); const ch = $("#chest", v); ch.classList.add("open");
+          setTimeout(() => { burstAt(ch, "coin", 50); burstAt(ch, "confetti", 70); }, 350);
+          setTimeout(() => { state.view = "result"; render(); window.scrollTo(0, 0); }, REDUCED ? 200 : 2200); return; }
+        state.lockFails++; snd("wrong");
+        state.lockMsg = state.lockFails === 1 ? "Bu sıralama kilidi açmadı. Sandık bir ipucu bıraktı, yukarıda." : "Bu sıralama da kilidi açmadı. Harfleri yeniden diz.";
+        render(); $("#slots", v).classList.add("shake"); quake();
+        setTimeout(() => { if (state.view === "lock") { state.lock = []; render(); } }, 900); return;
+      }
+      render();
+    }));
+    $("#undo", v).addEventListener("click", () => { state.lock.pop(); state.lockMsg = ""; render(); });
+    $("#clear", v).addEventListener("click", () => { state.lock = []; state.lockMsg = ""; render(); });
+  },
+  result(v) {
+    LB.tab = state.mode; lbSubmit(); mountLB();
+    setTimeout(() => { burstFrom(window.innerWidth / 2, -20, "confetti", 140); burstAt($("#chest", v), "coin", 30); }, 200);
+    snd("open");
+    $("#again", v).addEventListener("click", () => { const { name, mode, char } = state; state = freshState(); Object.assign(state, { name, mode, char, view: "character" }); render(); window.scrollTo(0, 0); });
+    $("#copy", v).addEventListener("click", () => {
+      const rank = rankOf(state.score / state.maxScore);
+      const text = `🏴‍☠️ Kavram Hazinesi · Kaptan ${state.name} (${clsOf(state.char.cls).name})\n${state.mode === "long" ? "Büyük keşif" : "Kısa rota"} · ${rank}\nPuan: ${state.score} · İlk denemede doğru: ${state.log.filter(l => l.first).length}/${state.log.length} · En uzun seri: ${state.bestStreak} · Rozet: ${state.ach.length}/${ACH.length} · Süre: ${fmtTime(state.t1 - state.t0)}`;
+      const out = $("#copyOut", v);
+      const fallback = () => { out.innerHTML = `<p class="muted" style="margin:6px 0">Otomatik kopyalanamadı. Metni seçip kopyala:</p><textarea class="copy" readonly>${esc(text)}</textarea>`; $("textarea", out).select(); };
+      try { navigator.clipboard.writeText(text).then(() => { out.innerHTML = `<p class="muted" style="margin:6px 0">Kopyalandı. Gruba yapıştırabilirsin.</p>`; }, fallback); } catch (e) { fallback(); }
+    });
+  }
+};
+
+window.addEventListener("resize", () => { const cv = $(".chart canvas"); if (cv) drawSea(cv); });
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { const cv = $(".chart canvas"); if (cv) { drawSea(cv); placeLabel(document); } });
+
+function start(data) {
+  if (data && data.state && data.state.v === 3 && views[data.state.view]) {
+    state = data.state;
+    if (state.view === "question" && state.q && !state.q.solved) state.q.deadline = Date.now() + timeFor();
+  }
+  lbInit();
+  render();
+}
+window.claude?.hot?.snapshot?.(() => ({ state }));
+window.claude?.hot?.ready ? window.claude.hot.ready(start) : start(window.claude?.hot?.data ?? {});
+</script>
+</body>
+</html>
